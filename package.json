@@ -1,0 +1,34 @@
+{
+  "name": "doubao-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DouBaoVideo desktop video production workspace",
+  "main": "out/main/index.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "build": "npm run typecheck && electron-vite build",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@xyflow/react": "13.0.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "electron": "45.3.4",
+    "electron-vite": "6.0.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
+  }
+}
