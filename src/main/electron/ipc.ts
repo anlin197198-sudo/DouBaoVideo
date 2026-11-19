@@ -1,5 +1,5 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
-import { COMMAND_CHANNEL } from "../../shared/bridge";
+import { COMMAND_CHANNEL, CONSUME_QUEUE_CHANNEL } from "../../shared/bridge";
 import type { CommandRouter } from "../application/command-router";
 
 export function isTrustedSender(
@@ -36,5 +36,16 @@ export function registerCommandHandler(
     return router.dispatch(request, {
       trusted: window !== null && isTrustedSender(event, window, rendererUrl),
     });
+  });
+}
+
+export function registerQueueIntentHandler(
+  getWindow: () => BrowserWindow | null,
+  rendererUrl: string,
+  consume: (trusted: boolean, args: unknown[]) => boolean,
+): void {
+  ipcMain.handle(CONSUME_QUEUE_CHANNEL, (event, ...args: unknown[]) => {
+    const window = getWindow();
+    return consume(window !== null && isTrustedSender(event, window, rendererUrl), args);
   });
 }
