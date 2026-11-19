@@ -20,6 +20,8 @@ export interface Account {
 }
 
 export interface Plan {
+  styleNotes?: string;
+  revision?: number;
   id: string;
   title: string;
   style: VisualStyle;
@@ -35,13 +37,98 @@ export interface CanvasPosition {
   y: number;
 }
 
+export interface StoryboardShot {
+  id: string;
+  title: string;
+  description: string;
+  action: string;
+  shotSize: string;
+  cameraMovement: string;
+  audio: string;
+  position: CanvasPosition;
+  needsReview: boolean;
+  assetsNeedReview?: boolean;
+}
+
+export type AssetType = "person" | "scene" | "prop";
+
+export interface ProductionAsset {
+  id: string;
+  type: AssetType;
+  name: string;
+  description: string;
+  referenceImageId: string | null;
+  version: number;
+  position: CanvasPosition;
+  needsReview: boolean;
+}
+
+export interface ReferenceImage {
+  id: string;
+  taskId: string;
+  originalName: string;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
 export interface TaskWorkspace {
+  /** View-only coordinates for prompt and frame nodes; absent in legacy workspaces. */
+  productionPositions?: Record<string, CanvasPosition>;
+  frames?: FrameWorkspace;
+  promptSettings?: { style: VisualStyle | null; notes: string; notesMode?: "inherit" | "override" };
+  prompts?: ProductionPrompt[];
   script: string;
   viewport: { x: number; y: number; zoom: number };
   scriptPosition: CanvasPosition;
+  /** Array order is the narrative order; canvas coordinates do not change it. */
+  shots: StoryboardShot[];
+  assets: ProductionAsset[];
+  /** One canonical relation set shared by checkboxes and canvas connections. */
+  assetLinks: { shotId: string; assetId: string }[];
+}
+
+export type FrameSlot = "first" | "last";
+export interface FrameCandidate {
+  id: string;
+  imageId: string;
+  slot: FrameSlot;
+  source: "import";
+  createdAt: string;
+  promptText: string;
+  promptVersion: number | null;
+  inputSnapshot: string;
+}
+export interface FrameWorkspace {
+  candidates: FrameCandidate[];
+  firstId: string | null;
+  lastId: string | null;
+  parameters: { aspectRatio: "16:9" | "9:16" | "1:1"; durationSeconds: 5 | 10 };
+  confirmation: { inputSnapshot: string; confirmedAt: string; invalidated: boolean } | null;
+}
+
+export type PromptKind = "shot" | "video" | "firstFrame" | "lastFrame";
+export interface ProductionPrompt {
+  kind: PromptKind;
+  shotId: string | null;
+  text: string;
+  version: number;
+  /** Exact local input snapshot reviewed by the editor, not a generated result. */
+  inputSnapshot: string;
+  source: "manual";
+}
+
+export interface PromptHistorySummary {
+  version: number; recordedAt: string; recordType: "baseline" | "saved";
+  textLength: number; inputLength: number;
+}
+export interface PromptHistoryDetail extends PromptHistorySummary {
+  text: string; inputSnapshot: string;
 }
 
 export interface VideoTask {
+  scheduleActive?: boolean;
+  executionTime?: string;
   id: string;
   planId: string;
   title: string;
@@ -74,6 +161,7 @@ export interface WorkspaceSnapshot {
   accounts: Account[];
   executions: Execution[];
   films: Film[];
+  referenceImages: ReferenceImage[];
 }
 
 export interface ApplicationInfo {
@@ -81,4 +169,13 @@ export interface ApplicationInfo {
   databaseVersion: number;
   dataDirectory: string;
   provider: { id: "doubao"; state: "unverified"; message: string };
+}
+
+export interface BackupResult {
+  directory: string; createdAt: string; databaseVersion: number;
+  imageCount: number; totalBytes: number; filmRecordCount: number;
+}
+
+export interface BackupValidationResult extends BackupResult {
+  taskCount: number;
 }

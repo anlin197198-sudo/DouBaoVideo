@@ -8,6 +8,10 @@ import { createApplicationPaths } from "./infrastructure/paths";
 import { AccountSessionManager } from "./electron/account-sessions";
 import { registerCommandHandler } from "./electron/ipc";
 import { registerApplicationProtocol } from "./electron/app-protocol";
+import { ReferenceImageStore } from "./infrastructure/reference-image-store";
+import { createReferenceImageGateway, decodeReference } from "./electron/reference-images";
+import { WorkspaceBackup } from "./infrastructure/workspace-backup";
+import { BackupValidation } from "./infrastructure/backup-validation";
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -65,14 +69,28 @@ if (!app.requestSingleInstanceLock()) {
     .then(async () => {
       const paths = createApplicationPaths(app.getPath("userData"));
       database = new ApplicationDatabase(paths.database);
+      const referenceStore = new ReferenceImageStore(database, paths.media, decodeReference);
+      const backups = new WorkspaceBackup({ database, mediaDirectory: paths.media, applicationVersion: app.getVersion(), decode: decodeReference,
+        chooseDirectory: async () => {
+          if (!mainWindow || mainWindow.isDestroyed()) throw new Error("Workspace window is closed");
+          const selection = await dialog.showOpenDialog(mainWindow, { title: "选择业务数据与静态图备份目录（不含视频/登录会话）", properties: ["openDirectory"] });
+          return selection.canceled ? null : selection.filePaths[0] ?? null;
+        } });
       const services = createApplicationServices({
         database,
         logger: new FileLogger(paths.logs),
         sessions,
         version: app.getVersion(),
         dataDirectory: paths.dataDirectory,
+        references: createReferenceImageGateway(referenceStore, () => mainWindow),
+        backups,
+        backupValidation: new BackupValidation(async () => {
+          if (!mainWindow || mainWindow.isDestroyed()) throw new Error("Workspace window is closed");
+          const selected = await dialog.showOpenDialog(mainWindow, { title: "选择要只读验证的备份目录（含 manifest.json）", properties: ["openDirectory"] });
+          return selected.canceled ? null : selected.filePaths[0] ?? null;
+        }, decodeReference),
       });
-      registerApplicationProtocol(resolve(__dirname, "../renderer"));
+      registerApplicationProtocol(resolve(__dirname, "../renderer"), id => referenceStore.pathFor(id));
       registerCommandHandler(services.router, () => mainWindow, rendererUrl);
       await createMainWindow();
       app.on("activate", () => {

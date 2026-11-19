@@ -1,7 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { capturePlanList, planListContext, type PlanListView } from "../../../shared/plan-list-view";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import type { Plan, VideoTask } from "../../../shared/models";
 import type { CommandInputs } from "../../../shared/bridge";
 import { Modal } from "../components/Modal";
+import { nextLocalStep } from "../../../shared/canvas-production";
+import { PlanEditDialog } from "../components/PlanEditDialog";
 
 function today(): string {
   const date = new Date();
@@ -29,24 +32,45 @@ export function PlansPage({
   onCreate,
   onToggle,
   onOpenTask,
+  onReload,
 }: {
   plans: Plan[];
   tasks: VideoTask[];
   busy: boolean;
-  view: { planId: string | null; day: number };
-  onViewChange: (view: { planId: string | null; day: number }) => void;
+  view: PlanListView;
+  onViewChange: (view: PlanListView) => void;
   onCreate: (input: CommandInputs["plans.create"]) => Promise<boolean>;
   onToggle: (plan: Plan) => void;
   onOpenTask: (task: VideoTask) => void;
+  onReload: () => Promise<void>;
 }) {
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Plan | null>(null);
   const selectedDay = view.day;
   const plan = plans.find((item) => item.id === view.planId) ?? plans[0];
   const dates = plan ? datesFor(plan) : [];
   const activeDate = dates[selectedDay];
   const dailyTasks = tasks.filter(
-    (task) => task.planId === plan?.id && task.businessDate === activeDate,
+    (task) => task.planId === plan?.id && task.businessDate === activeDate && task.scheduleActive !== false,
   );
+  const archivedTasks = tasks.filter(task => task.planId === plan?.id && task.scheduleActive === false);
+  const historicalTasks = tasks.filter(task => task.planId === plan?.id && task.scheduleActive !== false && !dates.includes(task.businessDate));
+
+  const archivedRef = useRef<HTMLDetailsElement>(null), historicalRef = useRef<HTMLDetailsElement>(null);
+  const context = planListContext(view, plan?.id, activeDate);
+  // The first committed layout already includes restored disclosures. Only navigation
+  // changes restore scroll; ordinary autosave/reload/toggle renders never jump the list.
+  useLayoutEffect(() => {
+    if (archivedRef.current) archivedRef.current.open = context?.archivedOpen ?? false;
+    if (historicalRef.current) historicalRef.current.open = context?.historicalOpen ?? false;
+    window.scrollTo({ top: context?.scrollY ?? 0, left: 0, behavior: "instant" });
+  }, [plan?.id, activeDate]);
+  function openTask(task: VideoTask) {
+    if (plan && activeDate) onViewChange(capturePlanList(view, plan.id, activeDate, window.scrollY,
+      archivedRef.current?.open ?? false, historicalRef.current?.open ?? false));
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    onOpenTask(task);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,6 +81,7 @@ export function PlansPage({
       startDate: String(data.get("startDate")),
       dailyCount: Number(data.get("dailyCount")),
       executionTime: String(data.get("executionTime")),
+      styleNotes: String(data.get("styleNotes") ?? ""),
     });
     if (saved) {
       setCreating(false);
@@ -101,6 +126,9 @@ export function PlansPage({
               {plan.dailyCount} 条 · {plan.executionTime}
             </span>
             <button
+              className="text-button" disabled={busy} onClick={() => setEditing(plan)}
+            >编辑计划</button>
+            <button
               className="text-button"
               disabled={busy}
               onClick={() => onToggle(plan)}
@@ -110,9 +138,8 @@ export function PlansPage({
           </div>
           <div className="week" aria-label="一周日期">
             {dates.map((date, index) => {
-              const count = tasks.filter(
-                (task) => task.planId === plan.id && task.businessDate === date,
-              ).length;
+              const dated = tasks.filter(task => task.planId === plan.id && task.businessDate === date && task.scheduleActive !== false);
+              const count = dated.length;
               return (
                 <button
                   key={date}
@@ -122,17 +149,19 @@ export function PlansPage({
                 >
                   <span>{date.slice(5).replace("-", "月")}日</span>
                   <strong>{date.slice(-2)}</strong>
-                  <small>{count} 条任务</small>
+                  <small>{dated.filter(task => task.status === "completed").length}/{count} 已完成</small>
                 </button>
               );
             })}
           </div>
           <h2 className="section-heading">{activeDate} 的任务</h2>
+          <p className="helper">本地排期已保存，真实定时调度尚未接入。完成数仅按已有完成记录统计。</p>
           <table>
             <thead>
               <tr>
                 <th>视频任务</th>
                 <th>当前步骤</th>
+                <th>计划时间</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -142,18 +171,19 @@ export function PlansPage({
                   <td>
                     <button
                       className="title-button"
-                      onClick={() => onOpenTask(task)}
+                      onClick={() => openTask(task)}
                     >
                       {task.title}
                     </button>
                   </td>
                   <td className="muted">
-                    {task.workspace.script ? "剧本已保存" : "待填写剧本"}
+                    {task.status === "completed" ? "已完成（历史记录）" : nextLocalStep(task.workspace, plan).label}
                   </td>
+                  <td>{task.executionTime ?? plan.executionTime}</td>
                   <td>
                     <button
                       className="text-button"
-                      onClick={() => onOpenTask(task)}
+                      onClick={() => openTask(task)}
                     >
                       打开画布
                     </button>
@@ -162,8 +192,17 @@ export function PlansPage({
               ))}
             </tbody>
           </table>
+          {historicalTasks.length > 0 && <details ref={historicalRef}><summary>历史日期任务（{historicalTasks.length}）</summary>
+            <p className="helper">已有执行记录保留原日期和时间，不计入新一周日期范围。</p>
+            {historicalTasks.map(task => <p key={task.id}>{task.businessDate} {task.executionTime} · {task.title} <button className="text-button" onClick={() => openTask(task)}>打开画布</button></p>)}
+          </details>}
+          {archivedTasks.length > 0 && <details ref={archivedRef}><summary>已移出排期，制作内容保留（{archivedTasks.length}）</summary>
+            <p className="helper">这些任务不计入每日数量，也不会定时派发。可以打开画布查看、复制和继续编辑。重新加入排期入口尚未实现。</p>
+            {archivedTasks.map(task => <p key={task.id}>{task.businessDate} · {task.title} <button className="text-button" onClick={() => openTask(task)}>打开保留的画布</button></p>)}
+          </details>}
         </>
       )}
+      {editing && <PlanEditDialog plan={editing} onClose={() => setEditing(null)} onSaved={async () => { await onReload(); onViewChange({ planId: editing.id, day: 0 }); }} />}
       {creating && (
         <Modal
           title="新建周计划"
@@ -188,6 +227,7 @@ export function PlansPage({
                 <option value="comic">漫剧</option>
               </select>
             </label>
+            <details><summary>补充计划风格说明（可选）</summary><label>计划风格说明<textarea name="styleNotes" maxLength={5000} rows={3} placeholder="例如：低饱和色彩、柔和光线。任务默认继承，可独立覆盖。" /></label></details>
             <details>
               <summary>调整排期</summary>
               <label>
@@ -206,6 +246,7 @@ export function PlansPage({
                     name="dailyCount"
                     type="number"
                     min="1"
+                    max="100"
                     defaultValue={1}
                     required
                   />
@@ -222,7 +263,7 @@ export function PlansPage({
               </div>
             </details>
             <p className="helper">
-              连续安排 7 天。当前先创建任务和本地制作空间。
+              连续安排 7 天，每天最多 100 条。当前先创建任务和本地制作空间。
             </p>
             <footer className="modal-actions">
               <button

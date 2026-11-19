@@ -1,3 +1,4 @@
+import type { PlanListView } from "../../shared/plan-list-view";
 import { useEffect, useState } from "react";
 import type {
   Account,
@@ -12,6 +13,7 @@ import { Modal } from "./components/Modal";
 import { PlansPage } from "./pages/PlansPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { TaskCanvas } from "./pages/TaskCanvas";
+import { BackupPanel } from "./components/BackupPanel";
 
 type Page = "plans" | "accounts" | "queue" | "films";
 const pages: { id: Page; label: string }[] = [
@@ -29,10 +31,8 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [showInfo, setShowInfo] = useState(false);
-  const [planView, setPlanView] = useState<{
-    planId: string | null;
-    day: number;
-  }>({ planId: null, day: 0 });
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [planView, setPlanView] = useState<PlanListView>({ planId: null, day: 0 });
   const selectedTask = snapshot?.tasks.find(
     (task) => task.id === selectedTaskId,
   );
@@ -71,15 +71,12 @@ export function App() {
     }
   }
 
-  async function saveWorkspace(workspace: TaskWorkspace): Promise<boolean> {
-    if (!selectedTask) return false;
-    return perform(() =>
-      command("tasks.saveWorkspace", {
-        id: selectedTask.id,
-        expectedRevision: selectedTask.revision,
-        workspace,
-      }),
-    );
+  async function saveWorkspace(workspace: TaskWorkspace, expectedRevision: number): Promise<VideoTask> {
+    if (!selectedTask) throw new Error("任务已关闭，草稿尚未保存。");
+    const saved = await command("tasks.saveWorkspace", { id: selectedTask.id, expectedRevision, workspace });
+    // Background saves do not lock editing or reload unrelated state.
+    setSnapshot(previous => previous ? { ...previous, tasks: previous.tasks.map(task => task.id === saved.id ? saved : task) } : previous);
+    return saved;
   }
 
   return (
@@ -145,8 +142,27 @@ export function App() {
             <TaskCanvas
               key={selectedTask.id}
               task={selectedTask}
+              planStyle={snapshot.plans.find(plan => plan.id === selectedTask.planId) ?? "realistic"}
+              referenceImages={snapshot.referenceImages.filter(image => image.taskId === selectedTask.id)}
               busy={busy}
               onSave={saveWorkspace}
+              onReadLatest={async () => {
+                const latest = await command("workspace.read", {});
+                const task = latest.tasks.find(item => item.id === selectedTask.id);
+                if (!task) throw new Error("已保存任务不存在。请先复制保留本地草稿，不会自动放弃内容。");
+                setSnapshot(previous => previous ? { ...previous,
+                  plans: latest.plans,
+                  tasks: previous.tasks.map(item => item.id === task.id ? task : item),
+                  referenceImages: latest.referenceImages } : previous);
+                return task;
+              }}
+              onConfirm={async () => {
+                let confirmed: VideoTask | null = null;
+                const completed = await perform(async () => { confirmed = await command("tasks.confirmFrames", {
+                  id: selectedTask.id, expectedRevision: selectedTask.revision,
+                }); });
+                return completed ? confirmed : null;
+              }}
               onBack={() => setSelectedTaskId(null)}
             />
           ) : (
@@ -154,6 +170,7 @@ export function App() {
               {page === "plans" && (
                 <PlansPage
                   plans={snapshot.plans}
+                  onReload={reload}
                   tasks={snapshot.tasks}
                   busy={busy}
                   view={planView}
@@ -233,7 +250,7 @@ export function App() {
         <span>桌面与数据基础 · v{info?.version ?? "0.1.0"}</span>
       </footer>
       {showInfo && (
-        <Modal title="工作区信息" onClose={() => setShowInfo(false)}>
+        <Modal title="工作区信息" busy={backupBusy} onClose={() => setShowInfo(false)}>
           <dl>
             <dt>数据库版本</dt>
             <dd>{info?.databaseVersion ?? "读取中"}</dd>
@@ -242,6 +259,7 @@ export function App() {
             <dt>豆包接入</dt>
             <dd>{info?.provider.message ?? "读取中"}</dd>
           </dl>
+          <BackupPanel onBusy={setBackupBusy} />
         </Modal>
       )}
     </div>

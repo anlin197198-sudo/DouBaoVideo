@@ -1,3 +1,4 @@
+import type { PlanChangePreview } from "./plan-changes";
 import type {
   Account,
   ApplicationInfo,
@@ -7,6 +8,10 @@ import type {
   VisualStyle,
   SubscriptionTier,
   WorkspaceSnapshot,
+  ReferenceImage,
+  BackupResult,
+  BackupValidationResult,
+  PromptKind, PromptHistorySummary, PromptHistoryDetail,
 } from "./models";
 
 export const COMMAND_CHANNEL = "doubao-video:command";
@@ -14,13 +19,18 @@ export const COMMAND_CHANNEL = "doubao-video:command";
 export interface CommandInputs {
   "app.info": Record<string, never>;
   "workspace.read": Record<string, never>;
+  "workspace.backup": Record<string, never>;
+  "workspace.verifyBackup": Record<string, never>;
   "plans.create": {
+    styleNotes?: string;
     title: string;
     style: VisualStyle;
     startDate: string;
     dailyCount: number;
     executionTime: string;
   };
+  "plans.previewEdit": { id: string; changes: CommandInputs["plans.create"] };
+  "plans.applyEdit": { id: string; changes: CommandInputs["plans.create"]; previewToken: string; removeTaskIds: string[] };
   "plans.setEnabled": { id: string; enabled: boolean };
   "tasks.saveWorkspace": {
     id: string;
@@ -35,17 +45,29 @@ export interface CommandInputs {
     enabled: boolean;
   };
   "accounts.openLogin": { id: string };
+  "assets.importReference": { taskId: string };
+  "tasks.confirmFrames": { id: string; expectedRevision: number };
+  "prompts.historyList": { taskId: string; kind: PromptKind; shotId: string | null; beforeVersion?: number; limit?: number };
+  "prompts.historyDetail": { taskId: string; kind: PromptKind; shotId: string | null; version: number };
 }
 
 export interface CommandOutputs {
   "app.info": ApplicationInfo;
   "workspace.read": WorkspaceSnapshot;
+  "workspace.backup": BackupResult | null;
+  "workspace.verifyBackup": BackupValidationResult | null;
   "plans.create": { plan: Plan; tasks: VideoTask[] };
+  "plans.previewEdit": PlanChangePreview;
+  "plans.applyEdit": { plan: Plan; tasks: VideoTask[] };
   "plans.setEnabled": Plan;
   "tasks.saveWorkspace": VideoTask;
   "accounts.create": Account;
   "accounts.update": Account;
   "accounts.openLogin": { opened: true };
+  "assets.importReference": ReferenceImage | null;
+  "tasks.confirmFrames": VideoTask;
+  "prompts.historyList": { items: PromptHistorySummary[]; nextBeforeVersion: number | null };
+  "prompts.historyDetail": PromptHistoryDetail;
 }
 
 export type CommandName = keyof CommandInputs;
