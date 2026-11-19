@@ -1,8 +1,13 @@
+import { viewportForTarget } from "../../../shared/canvas-focus";
+import { command } from "../api/client";
+import { acceptScriptReuseDraft, type ScriptReusePreview } from "../../../shared/script-reuse-draft";
+import { applyTemporaryTemplate, type TemporaryTemplateApply } from "../../../shared/temporary-template-apply";
+import { imagePreview, refreshImagePreviews, settleImagePreview, type ImagePreviewState } from "../../../shared/image-preview-state";
 import type { PlanStyleContext } from "../../../shared/prompts";
 import { useEffect, useRef, useState } from "react";
 import { WorkspaceAutosave, type SaveState } from "../../../shared/workspace-autosave";
 import { nextLocalStep, productionNodes, productionEdges, storeProductionPositions } from "../../../shared/canvas-production";
-import { arrangeCanvas, placeAddedNodes, preserveProductionPositions } from "../../../shared/canvas-layout";
+import { arrangeCanvas, canvasBoxes, placeAddedNodes, preserveProductionPositions } from "../../../shared/canvas-layout";
 import {
   Background,
   Controls,
@@ -16,8 +21,12 @@ import {
 import type { AssetType, ProductionAsset, ReferenceImage, StoryboardShot, TaskWorkspace, VideoTask } from "../../../shared/models";
 import { addShot, editScript, MAX_SHOTS, moveShot, removeShot } from "../../../shared/storyboard";
 import { addAsset, ASSET_LABELS, mergeAssets } from "../../../shared/assets";
+import { AssetLinkSuggestions } from "../components/AssetLinkSuggestions";
 import { AssetEditor, AssetLibrary } from "../components/AssetPanel";
 import { connectionError, removeAsset, setAssetLink } from "../../../shared/asset-links";
+import { appendStoryboardDraft } from "../../../shared/storyboard-draft";
+import { StoryboardGeneration } from "../components/StoryboardGeneration";
+import { ScriptHistory } from "../components/ScriptHistory";
 import { PromptPanel } from "../components/PromptPanel";
 import { FramePanel } from "../components/FramePanel";
 import { SaveConflictDialog } from "../components/SaveConflictDialog";
@@ -36,14 +45,19 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
 }) {
   const [workspace, setWorkspace] = useState(task.workspace);
   const flow = useRef<ReactFlowInstance | null>(null);
+  const stage = useRef<HTMLDivElement | null>(null);
+  const focusOperation = useRef(0);
+  useEffect(() => () => { focusOperation.current++; }, []);
   const measuredSizes = () => new Map((flow.current?.getNodes() ?? []).map(node => [node.id, node.measured ?? {}]));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [promptSelection, setPromptSelection] = useState("video");
   const [promptOpenRequest, setPromptOpenRequest] = useState(0);
   const [frameSlot, setFrameSlot] = useState<"first" | "last">("first");
-  const [failedFrames, setFailedFrames] = useState<Record<string, boolean>>({});
+  const [imagePreviews, setImagePreviews] = useState<ImagePreviewState>({});
+  const refreshPreviews = (ids: string[]) => setImagePreviews(previous => refreshImagePreviews(previous, ids));
+  const settlePreview = (id: string, epoch: number, status: "ready" | "failed") => setImagePreviews(previous => settleImagePreview(previous, id, epoch, status));
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>({ dirty: false, saving: false, error: null, conflict: false });
+  const [saveState, setSaveState] = useState<SaveState>({ dirty: false, saving: false, error: null, requestId: null, conflict: false });
   const [conflictOpen, setConflictOpen] = useState(false);
   const [canvasReload, setCanvasReload] = useState(0);
   const dirty = saveState.dirty;
@@ -58,6 +72,8 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [selectedLink, setSelectedLink] = useState<{ assetId: string; shotId: string } | null>(null);
   const working = busy || referenceBusy || leaving;
+  const applyLive = useRef({ taskId: task.id, planStyle, working });
+  applyLive.current = { taskId: task.id, planStyle, working };
   const saveCallback = useRef(onSave);
   saveCallback.current = onSave;
   const controllerRef = useRef<WorkspaceAutosave | null>(null);
@@ -130,12 +146,14 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
   })), ...production.frames.map((frame): Node => ({
     id: frame.id, position: frame.position, selected: selectedId === frame.id, connectable: false,
     sourcePosition: Position.Right, targetPosition: Position.Left,
-    data: { label: <div className="script-node"><small>静态图片 · {frame.candidate && failedFrames[frame.candidate.imageId] ? "文件不可读" : frame.status}</small><strong>{frame.title}</strong>
-      {frame.candidate && !failedFrames[frame.candidate.imageId] && <img
-        src={`app://media/${frame.candidate.imageId}`} alt={`${frame.title}当前图片`}
+    data: { label: <div className="script-node"><small>静态图片 · {frame.candidate && (imagePreview(imagePreviews, frame.candidate.imageId).status === "failed") ? "文件不可读" : frame.status}</small><strong>{frame.title}</strong>
+      {frame.candidate && !(imagePreview(imagePreviews, frame.candidate.imageId).status === "failed") && <img
+        key={`${frame.candidate.imageId}-${imagePreview(imagePreviews, frame.candidate.imageId).epoch}`}
+        src={`app://media/${frame.candidate.imageId}?v=${imagePreview(imagePreviews, frame.candidate.imageId).epoch}`} alt={`${frame.title}当前图片`}
         style={{ width: "100%", height: 150, objectFit: "contain" }}
-        onError={() => setFailedFrames(previous => ({ ...previous, [frame.candidate!.imageId]: true }))} />}
-      <p>{frame.candidate ? failedFrames[frame.candidate.imageId] ? "图片无法读取，点击重新导入或选择。" : "本地导入 · 点击预览与审核" : "点击导入并选择当前图片。"}</p>
+        onLoad={() => settlePreview(frame.candidate!.imageId, imagePreview(imagePreviews, frame.candidate!.imageId).epoch, "ready")}
+        onError={() => settlePreview(frame.candidate!.imageId, imagePreview(imagePreviews, frame.candidate!.imageId).epoch, "failed")} />}
+      <p>{frame.candidate ? (imagePreview(imagePreviews, frame.candidate.imageId).status === "failed") ? "图片无法读取，点击重新导入或选择。" : "本地导入 · 点击预览与审核" : "点击导入并选择当前图片。"}</p>
     </div> },
   }))];
   const edges: Edge[] = [...workspace.shots.map(shot => ({
@@ -172,12 +190,38 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
     controller.update(positioned);
   }
 
+  const applyTemplate: TemporaryTemplateApply = (envelope, context, editor) => {
+    const live = applyLive.current;
+    if (live.working || context.taskId !== live.taskId) return false;
+    const state = controller.state;
+    const result = applyTemporaryTemplate(envelope, { ...context, taskId: live.taskId, revision: controller.savedRevision,
+      workspace: controller.workspace, plan: live.planStyle,
+      saveState: { dirty: state.dirty, saving: state.saving, error: state.error, conflict: state.conflict } }, editor, true);
+    if (result.status !== "draft-applied") return false;
+    const positioned = preserveProductionPositions(controller.workspace, result.workspace);
+    setWorkspace(positioned); controller.update(positioned); return true;
+  };
+
+  async function reuseScript(preview: ScriptReusePreview, current: () => boolean): Promise<boolean> {
+    const live = applyLive.current;
+    if (!current() || live.working || preview.taskId !== live.taskId || preview.revision !== controller.savedRevision
+      || controller.state.dirty || controller.state.saving || controller.state.error || controller.state.conflict) return false;
+    const result = await command("scripts.applyReuse", { taskId: preview.taskId, expectedRevision: preview.revision, token: preview.token });
+    const latest = applyLive.current;
+    if (!current() || latest.working) return false;
+    const workspace = acceptScriptReuseDraft(result, { taskId: latest.taskId, revision: controller.savedRevision, workspace: controller.workspace, plan: latest.planStyle, state: controller.state });
+    if (!workspace) return false;
+    if (result.changed) { setWorkspace(workspace); controller.update(workspace); }
+    return true;
+  }
+
   function updateShot(patch: Partial<StoryboardShot>) {
     edit({ ...workspace, shots: workspace.shots.map(shot =>
       shot.id === selectedId ? { ...shot, ...patch } : shot) });
   }
 
   function select(id: string | null) {
+    focusOperation.current++;
     if (working) return;
     setSelectedId(id);
     setAssetLibraryOpen(false);
@@ -235,7 +279,26 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
     if (working) return;
     if (nextStep.target === "add-shot") add();
     else if (nextStep.target === "assets") { select(null); setAssetLibraryOpen(true); }
-    else select(nextStep.target);
+    else {
+      select(nextStep.target);
+      // The review overlay conceals the canvas; opening its exact role is sufficient.
+      if (nextStep.target.startsWith("frame:")) return;
+      const operation = focusOperation.current, capturedFlow = flow.current, capturedTask = task.id;
+      requestAnimationFrame(() => {
+        if (operation !== focusOperation.current || applyLive.current.working || applyLive.current.taskId !== capturedTask || flow.current !== capturedFlow) return;
+        const instance = flow.current, host = stage.current;
+        const node = instance?.getNode(nextStep.target);
+        if (!instance || !host || !node) return;
+        const box = canvasBoxes(controller.workspace, measuredSizes()).find(item => item.id === node.id);
+        if (!box) return;
+        const bounds = host.getBoundingClientRect();
+        const editor = host.querySelector<HTMLElement>(".node-editor")?.getBoundingClientRect();
+        const visibleWidth = editor ? Math.max(0, Math.min(host.clientWidth, editor.left - bounds.left - 12)) : host.clientWidth;
+        const viewport = viewportForTarget(instance.getViewport(), { width: visibleWidth, height: host.clientHeight },
+          { position: node.position, width: node.measured?.width ?? box.width, height: node.measured?.height ?? box.height });
+        if (viewport) void instance.setViewport(viewport, { duration: 0 }).catch(() => undefined);
+      });
+    }
   }
 
   return <div className="canvas-page">
@@ -243,7 +306,7 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
       onClose={() => setConflictOpen(false)} onResolve={async (latest, choice) => {
         const resolved = await controller.resolveConflict(latest, choice);
         if (resolved && choice === "discard") {
-          setCanvasReload(value => value + 1); setSelectedId(null); setPromptsOpen(false); setFramesOpen(false); setAssetLibraryOpen(false);
+          focusOperation.current++; setCanvasReload(value => value + 1); setSelectedId(null); setPromptsOpen(false); setFramesOpen(false); setAssetLibraryOpen(false);
         }
         return resolved;
       }} />}
@@ -253,6 +316,7 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
         void save().then(saved => { if (saved) onBack(); else setLeaving(false); });
       }}>← 返回周计划</button>
       <span className="muted" role="status">{saveState.error ? `保存失败：${saveState.error} 草稿仍保留，请重试。` : saveState.saving ? "保存中…" : dirty ? "等待自动保存…" : "已保存"}</span>
+      {saveState.error && saveState.requestId && <small>保存请求编号 {saveState.requestId}</small>}
     </div>
     <div className="page-heading">
       <h1>{task.title}</h1>
@@ -276,11 +340,12 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
       <span className="muted">{workspace.shots.length} 个镜头{reviewCount > 0 ? ` · ${reviewCount} 个待核对` : ""}</span>
     </div>
     <p className="helper">本地手动制作；真实生成尚未接入。虚线表示只读来源关系，实线资产引用可调整。</p>
-    {promptsOpen && <PromptPanel key={promptOpenRequest} taskId={task.id} savedRevision={controller.savedRevision} workspace={workspace} planStyle={planStyle} disabled={working} onChange={edit} initialSelection={promptSelection} onClose={() => select(null)} />}
+    {promptsOpen && <PromptPanel key={promptOpenRequest} taskId={task.id} savedRevision={controller.savedRevision} saveState={saveState} onApplyTemplate={applyTemplate} workspace={workspace} planStyle={planStyle} disabled={working} restoreDisabled={working || saveState.dirty || saveState.saving || saveState.conflict || !!saveState.error} onChange={edit} initialSelection={promptSelection} onClose={() => select(null)} />}
     {closeNotice && <p role="status" className="review-notice">已阻止关闭以保护尚未保存的内容。等待显示“已保存”后可再次关闭；保存失败时请先重试。</p>}
-    {framesOpen && <FramePanel workspace={workspace} planStyle={planStyle} taskId={task.id} images={images} busy={working || saveState.saving} dirty={dirty}
+    {framesOpen && <FramePanel workspace={workspace} planStyle={planStyle} taskId={task.id} images={images} busy={working || saveState.saving} dirty={dirty} saveState={saveState} savedRevision={controller.savedRevision}
       onChange={edit} onBusy={setReferenceBusy} onEditPrompt={kind => select(`prompt:${kind}`)} focusSlot={frameSlot} onClose={() => select(null)}
-      onImport={image => setImages(previous => [...previous.filter(item => item.id !== image.id), image])}
+      imagePreviews={imagePreviews} onPreviewEvent={settlePreview} onRefreshImages={refreshPreviews}
+      onImport={image => { setImages(previous => [...previous.filter(item => item.id !== image.id), image]); refreshPreviews([image.id]); setImageRefresh(previous => previous + 1); }}
       onConfirm={async () => { if (controller.state.dirty || controller.state.saving || working) return;
         const confirmed = await onConfirm(); if (confirmed) controller.accept(confirmed); }} />}
     {linkMessage && <p className="link-notice" role="status">{linkMessage}</p>}
@@ -289,8 +354,8 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
       <button className="text-button" disabled={working} onClick={() => link(selectedLink.assetId, selectedLink.shotId, false)}>解除这条引用</button>
       <button className="text-button" onClick={() => setSelectedLink(null)}>取消</button>
     </div>}
-    <div className="canvas-stage" inert={working}>
-      <ReactFlow key={canvasReload} nodes={nodes} edges={edges} onNodesChange={changeNodes} nodeDragThreshold={0} onInit={instance => { flow.current = instance; }}
+    <div ref={stage} className="canvas-stage" inert={working}>
+      <ReactFlow key={canvasReload} nodes={nodes} edges={edges} onNodesChange={changeNodes} nodeDragThreshold={0} onInit={instance => { focusOperation.current++; flow.current = instance; }}
         onNodeClick={(_event, node) => select(node.id)} onPaneClick={() => select(null)}
         onConnect={connection => link(connection.source, connection.target, true)}
         isValidConnection={connection => !working && !connectionError(workspace, connection.source, connection.target)}
@@ -303,6 +368,7 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
           if (relation) setSelectedLink(relation);
         }}
         defaultViewport={workspace.viewport}
+        onMoveStart={() => { focusOperation.current++; }}
         onMoveEnd={(_event, viewport) => {
           const latest = controller.workspace;
           if (viewport.x !== latest.viewport.x || viewport.y !== latest.viewport.y || viewport.zoom !== latest.viewport.zoom)
@@ -320,6 +386,7 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
         images={images} taskId={task.id} busy={working} refresh={imageRefresh} onBusy={setReferenceBusy}
         onImport={image => {
           setImages(previous => [...previous.filter(item => item.id !== image.id), image]);
+          refreshPreviews([image.id]);
           setImageRefresh(previous => previous + 1);
         }} onChange={patch => updateAsset(selectedAsset.id, patch)}
         onBack={() => { select(null); setAssetLibraryOpen(true); }}
@@ -363,6 +430,7 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
           </details>
           <p className="helper">上移、下移改变镜头顺序。拖动节点只调整画布位置。</p>
           <fieldset className="shot-assets"><legend>关联资产</legend>
+            <AssetLinkSuggestions key={selectedShot.id} workspace={workspace} shotId={selectedShot.id} busy={working || saveState.conflict} onChange={edit} />
             {selectedShot.assetsNeedReview && <div className="review-notice"><p>资产关联或设定已变化，请核对这个镜头，并在提示词面板核对受影响的提示词。</p>
               <button className="text-button" disabled={working || dirty} onClick={() => updateShot({ assetsNeedReview: false })}>已核对资产</button>
               {dirty && <p className="helper">先保存当前修改，再确认核对结果。</p>}
@@ -391,6 +459,16 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
             placeholder="写下故事、对白和画面。" /></label>
           <p className="helper">{workspace.script.trim() ? "剧本写好后，点击「添加镜头」逐个整理分镜。" : "先写下剧本，再添加分镜。"}</p>
           <p className="helper">编辑内容与位置会自动保存；返回前会保存最新修改。保存失败时草稿保留，请点击重试。</p>
+          <StoryboardGeneration key={`storyboard-${task.id}`} taskId={task.id} revision={controller.savedRevision}
+            ready={!!workspace.script.trim() && !working && !dirty && !saveState.saving && !saveState.conflict && !saveState.error}
+            onAdopt={result => {
+              const draft = appendStoryboardDraft({ taskId: task.id, revision: controller.savedRevision,
+                workspace: controller.workspace, state: controller.state }, result);
+              if (!draft) return false;
+              edit(placeAddedNodes(controller.workspace, draft, measuredSizes()));
+              return true;
+            }} />
+          <ScriptHistory key={task.id} taskId={task.id} savedRevision={controller.savedRevision} reuseDisabled={working || dirty || saveState.saving || !!saveState.error || saveState.conflict} onReuse={reuseScript} />
         </>}
       </aside>}
     </div>

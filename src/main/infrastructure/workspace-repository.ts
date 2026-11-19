@@ -1,3 +1,4 @@
+import { localExecutionRecoveryState, localExecutionTimestamp } from "../../shared/execution-recovery";
 import { randomUUID, createHash } from "node:crypto";
 import { planChangePreview, removalProblem } from "../../shared/plan-changes";
 import { inheritsStyleNotes } from "../../shared/prompts";
@@ -7,7 +8,7 @@ import type {
   TaskWorkspace,
   VideoTask,
   WorkspaceSnapshot,
-  PromptHistorySummary,
+  PromptHistorySummary, ScriptHistorySummary,
 } from "../../shared/models";
 import type { CommandInputs } from "../../shared/bridge";
 import { ApplicationError } from "../core/errors";
@@ -83,23 +84,27 @@ export class WorkspaceRepository {
         .all()
         .map(accountFromRow),
       executions: db
-        .prepare("SELECT * FROM executions ORDER BY created_at DESC")
+        .prepare(`SELECT id, task_id, status, account_id, created_at, updated_at,
+          CASE WHEN typeof(remote_reference) = 'text' AND length(trim(remote_reference, char(9,10,13,32))) > 0 THEN 1 ELSE 0 END AS has_reference
+          FROM executions ORDER BY created_at DESC, id`)
         .all()
         .map((row) => ({
           id: String(row.id),
           taskId: String(row.task_id),
-          status: String(row.status),
+          status: localExecutionRecoveryState(row.status),
           accountId: row.account_id === null ? null : String(row.account_id),
-          createdAt: String(row.created_at),
+          createdAt: localExecutionTimestamp(row.created_at),
+          updatedAt: localExecutionTimestamp(row.updated_at),
+          hasRecordedRemoteReference: row.has_reference === 1,
         })),
       films: db
-        .prepare("SELECT * FROM films ORDER BY created_at DESC")
+        .prepare("SELECT id, task_id, version, created_at FROM films ORDER BY created_at DESC, id")
         .all()
         .map((row) => ({
           id: String(row.id),
           taskId: String(row.task_id),
-          filePath: String(row.file_path),
-          version: Number(row.version),
+          version: typeof row.version === "number" && Number.isSafeInteger(row.version) && row.version > 0 ? row.version : null,
+          createdAt: localExecutionTimestamp(row.created_at),
         })),
       referenceImages: db.prepare("SELECT * FROM reference_images ORDER BY created_at, id").all()
         .map(row => ({
@@ -306,6 +311,11 @@ export class WorkspaceRepository {
       );
     if (row) {
       const recordedAt = new Date().toISOString();
+      if (workspace.script !== previous.workspace.script) {
+        const maximum = this.database.connection.prepare("SELECT MAX(version) AS maximum FROM script_history WHERE task_id=?").get(input.id);
+        this.database.connection.prepare("INSERT INTO script_history VALUES (?,?,?,?,'saved')")
+          .run(input.id, Number(maximum?.maximum ?? 0) + 1, workspace.script, recordedAt);
+      }
       for (const prompt of workspace.prompts ?? []) {
         const old = previous.workspace.prompts?.find(item => item.kind === prompt.kind && item.shotId === prompt.shotId);
         if (!old || old.version !== prompt.version) this.database.connection.prepare("INSERT INTO prompt_history VALUES (?,?,?,?,?,?,?,'saved')")
@@ -328,6 +338,25 @@ export class WorkspaceRepository {
     const row = this.database.connection.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
     if (!row) throw new ApplicationError("NOT_FOUND", "这条任务已不存在，请刷新列表。");
     return taskFromRow(row);
+  }
+
+  listScriptHistory(input: CommandInputs["scripts.historyList"]) {
+    this.getTask(input.taskId);
+    const limit = input.limit ?? 20;
+    const rows = this.database.connection.prepare(`SELECT version,recorded_at,record_type,length(text) AS text_length
+      FROM script_history WHERE task_id=? AND version < ? ORDER BY version DESC LIMIT ?`)
+      .all(input.taskId, input.beforeVersion ?? Number.MAX_SAFE_INTEGER, limit + 1);
+    const items = rows.slice(0, limit).map(row => this.scriptSummary(row));
+    return { items, nextBeforeVersion: rows.length > limit ? items.at(-1)!.version : null };
+  }
+  private scriptSummary(row: Row): ScriptHistorySummary {
+    return { version: Number(row.version), recordedAt: String(row.recorded_at), recordType: row.record_type as "baseline" | "saved", textLength: Number(row.text_length) };
+  }
+  getScriptHistory(input: CommandInputs["scripts.historyDetail"]) {
+    this.getTask(input.taskId);
+    const row = this.database.connection.prepare("SELECT *,length(text) AS text_length FROM script_history WHERE task_id=? AND version=?").get(input.taskId, input.version);
+    if (!row) throw new ApplicationError("NOT_FOUND", "这个任务没有该剧本历史版本。");
+    return { ...this.scriptSummary(row), text: String(row.text) };
   }
 
   listPromptHistory(input: CommandInputs["prompts.historyList"]) {
@@ -392,7 +421,14 @@ export class WorkspaceRepository {
     return accountFromRow(row);
   }
 
+  assertAccountAvailable(id: string): void {
+    this.getAccount(id);
+    const marker = this.database.connection.prepare("SELECT state FROM account_removal WHERE account_id=?").get(id);
+    if (!marker || marker.state !== "present") throw new ApplicationError("CONFLICT", "账号正在移除或已移除，不能登录或编辑启用状态。");
+  }
+
   updateAccount(input: CommandInputs["accounts.update"]): Account {
+    this.assertAccountAvailable(input.id);
     const row = this.database.connection
       .prepare(
         `

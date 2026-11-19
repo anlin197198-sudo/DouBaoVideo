@@ -1,6 +1,6 @@
 import type { TaskWorkspace, VideoTask } from "./models";
 
-export interface SaveState { dirty: boolean; saving: boolean; error: string | null; conflict: boolean }
+export interface SaveState { dirty: boolean; saving: boolean; error: string | null; requestId: string | null; conflict: boolean }
 
 /** One writer owns the server revision. New edits never get replaced by older replies. */
 export class WorkspaceAutosave {
@@ -13,13 +13,14 @@ export class WorkspaceAutosave {
   private paused = false;
   private disposed = false;
   private failure: string | null = null;
+  private failureRequestId: string | null = null;
   private conflict = false;
   private readonly taskId: string;
   constructor(task: VideoTask, private readonly write: (workspace: TaskWorkspace, revision: number) => Promise<VideoTask>,
     private readonly changed: (state: SaveState, normalized?: TaskWorkspace) => void, private readonly delay = 800) {
     this.value = task.workspace; this.revision = task.revision; this.taskId = task.id;
   }
-  get state(): SaveState { return { dirty: this.generation !== this.savedGeneration, saving: this.running !== null, error: this.failure, conflict: this.conflict }; }
+  get state(): SaveState { return { dirty: this.generation !== this.savedGeneration, saving: this.running !== null, error: this.failure, requestId: this.failureRequestId, conflict: this.conflict }; }
   get workspace() { return this.value; }
   get savedRevision() { return this.revision; }
   private emit(normalized?: TaskWorkspace) { if (!this.disposed) this.changed(this.state, normalized); }
@@ -42,7 +43,7 @@ export class WorkspaceAutosave {
   resolveConflict(latest: VideoTask, choice: "overwrite" | "discard"): Promise<boolean> {
     if (!this.conflict || this.running || this.disposed || this.paused) return Promise.resolve(false);
     if (latest.id !== this.taskId || latest.revision < this.revision) throw new Error("读取的任务版本无效，请重新读取。");
-    this.clearTimer(); this.revision = latest.revision; this.failure = null; this.conflict = false;
+    this.clearTimer(); this.revision = latest.revision; this.failure = null; this.failureRequestId = null; this.conflict = false;
     if (choice === "discard") {
       this.value = latest.workspace; this.savedGeneration = this.generation; this.emit(this.value);
       return Promise.resolve(true);
@@ -54,7 +55,7 @@ export class WorkspaceAutosave {
     if (this.running) return this.running;
     if (this.disposed || this.paused) return Promise.resolve(false);
     if (this.conflict) return Promise.resolve(false);
-    if (retry) this.failure = null;
+    if (retry) { this.failure = null; this.failureRequestId = null; }
     if (this.failure) return Promise.resolve(false);
     if (!this.state.dirty) return Promise.resolve(true);
     // Defer draining one microtask so even a synchronously throwing writer is locked.
@@ -68,6 +69,8 @@ export class WorkspaceAutosave {
           else this.emit();
         } catch (cause) {
           this.failure = cause instanceof Error ? cause.message : "保存失败，请重试。";
+          const requestId = cause instanceof Error && "requestId" in cause ? cause.requestId : null;
+          this.failureRequestId = typeof requestId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId) ? requestId : null;
           this.conflict = typeof cause === "object" && cause !== null && "code" in cause && cause.code === "CONFLICT";
           return false;
         }

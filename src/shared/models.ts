@@ -1,3 +1,4 @@
+import type { LocalExecutionRecoveryState } from "./execution-recovery";
 export type SubscriptionTier =
   | "unknown"
   | "free"
@@ -143,16 +144,18 @@ export interface VideoTask {
 export interface Execution {
   id: string;
   taskId: string;
-  status: string;
+  status: LocalExecutionRecoveryState;
   accountId: string | null;
-  createdAt: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  hasRecordedRemoteReference: boolean;
 }
 
 export interface Film {
   id: string;
   taskId: string;
-  filePath: string;
-  version: number;
+  version: number | null;
+  createdAt: string | null;
 }
 
 export interface WorkspaceSnapshot {
@@ -179,3 +182,10 @@ export interface BackupResult {
 export interface BackupValidationResult extends BackupResult {
   taskCount: number;
 }
+
+export interface IsolatedRestoreResult extends BackupValidationResult {
+  isolated: true; workspaceActivated: false; videoFilesIncluded: false; notice: string;
+}
+
+export interface ScriptHistorySummary { version: number; recordedAt: string; recordType: "baseline" | "saved"; textLength: number }
+export interface ScriptHistoryDetail extends ScriptHistorySummary { text: string }

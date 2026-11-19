@@ -117,6 +117,10 @@ const planFields = z
     .strict();
 
 export const commandSchemas = {
+  "scripts.historyList": z.object({ taskId: identifier, beforeVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(), limit: z.number().int().min(1).max(30).optional() }).strict(),
+  "scripts.previewReuse": z.object({taskId:identifier,expectedRevision:z.number().int().nonnegative(),version:z.number().int().positive().max(Number.MAX_SAFE_INTEGER)}).strict(),
+  "scripts.applyReuse": z.object({taskId:identifier,expectedRevision:z.number().int().nonnegative(),token:identifier}).strict(),
+  "scripts.historyDetail": z.object({ taskId: identifier, version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   "prompts.historyList": z.object({ taskId: identifier, kind: z.enum(["shot", "video", "firstFrame", "lastFrame"]), shotId: identifier.nullable(),
     beforeVersion: z.number().int().positive().optional(), limit: z.number().int().min(1).max(30).optional() }).strict()
     .refine(value => value.kind === "shot" ? value.shotId !== null : value.shotId === null, "提示词历史位置无效"),
@@ -127,6 +131,7 @@ export const commandSchemas = {
   "workspace.read": z.object({}).strict(),
   "workspace.backup": z.object({}).strict(),
   "workspace.verifyBackup": z.object({}).strict(),
+  "workspace.restoreBackup": z.object({}).strict(),
   "plans.create": planFields,
   "plans.previewEdit": z.object({ id: identifier, changes: planFields }).strict(),
   "plans.applyEdit": z.object({ id: identifier, changes: planFields, previewToken: z.string().regex(/^[a-f0-9]{64}$/),
@@ -147,5 +152,8 @@ export const commandSchemas = {
     .strict(),
   "accounts.openLogin": z.object({ id: identifier }).strict(),
   "assets.importReference": z.object({ taskId: identifier }).strict(),
+  "storyboard.readiness": z.object({}).strict(),
+  "storyboard.adoptDraft": z.object({ taskId: identifier, expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), token: identifier }).strict(),
+  "storyboard.generatePreview": z.object({ taskId: identifier, expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict(),
   "tasks.confirmFrames": z.object({ id: identifier, expectedRevision: z.number().int().nonnegative() }).strict(),
 };

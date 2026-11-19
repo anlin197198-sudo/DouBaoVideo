@@ -60,7 +60,7 @@ test("consistent WAL snapshot and exact static images validate, omit sessions, a
     const result = await exporter.create(); assert.ok(result);
     assert.deepEqual(readdirSync(result.directory).sort(), ["manifest.json", "media", "workspace.sqlite"]);
     const manifest = JSON.parse(readFileSync(join(result.directory, "manifest.json"), "utf8")) as BackupManifest;
-    assert.equal(manifest.databaseVersion, 5); assert.equal(manifest.files.length, 2);
+    assert.equal(manifest.databaseVersion, 7); assert.equal(manifest.files.length, 2);
     assert.equal(manifest.videoFilesIncluded, false);
     assert.equal(existsSync(join(result.directory, "Partitions")), false);
     for (const file of manifest.files) assert.equal(createHash("sha256").update(readFileSync(join(result.directory, file.path))).digest("hex"), file.sha256);

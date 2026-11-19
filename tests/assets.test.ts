@@ -1,3 +1,4 @@
+import { removeV7Schema } from "./removal-schema-fixture";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -150,10 +151,10 @@ test("migrates version 1 database without losing plans, scripts or receipts", ()
       .run(receiptId, "test.migration", "test-hash", JSON.stringify({ saved: true }), new Date().toISOString());
     db.connection.prepare("UPDATE tasks SET workspace_json = ? WHERE id = ?")
       .run(JSON.stringify({ script: "旧剧本", scriptPosition: { x: 10, y: 20 }, viewport: { x: 1, y: 2, zoom: 0.8 } }), task.id);
-    db.connection.exec("DROP TABLE reference_images; DROP TABLE prompt_history; ALTER TABLE plans DROP COLUMN style_notes; ALTER TABLE plans DROP COLUMN revision; ALTER TABLE tasks DROP COLUMN schedule_active; ALTER TABLE tasks DROP COLUMN execution_time; PRAGMA user_version = 1;");
+    db.connection.exec(removeV7Schema + "DROP TABLE reference_images; DROP TABLE script_history; DROP TABLE prompt_history; ALTER TABLE plans DROP COLUMN style_notes; ALTER TABLE plans DROP COLUMN revision; ALTER TABLE tasks DROP COLUMN schedule_active; ALTER TABLE tasks DROP COLUMN execution_time; PRAGMA user_version = 1;");
     db.close(); db = undefined;
     db = new ApplicationDatabase(path);
-    assert.equal(db.version, 5);
+    assert.equal(db.version, 7);
     assert.equal(db.connection.prepare("SELECT COUNT(*) AS count FROM tasks").get()?.count, 7);
     const row = db.connection.prepare("SELECT workspace_json FROM tasks WHERE id = ?").get(task.id);
     assert.equal(JSON.parse(String(row?.workspace_json)).script, "旧剧本");

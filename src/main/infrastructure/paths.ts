@@ -8,7 +8,8 @@ export function createApplicationPaths(dataDirectory: string) {
     logs: join(dataDirectory, "logs"),
     media: join(dataDirectory, "media"),
   };
-  for (const directory of [paths.dataDirectory, paths.logs, paths.media])
+  // Diagnostics are best-effort; FileLogger creates its directory only when writing.
+  for (const directory of [paths.dataDirectory, paths.media])
     mkdirSync(directory, { recursive: true });
   return paths;
 }

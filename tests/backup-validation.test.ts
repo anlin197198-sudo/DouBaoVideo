@@ -1,3 +1,4 @@
+import { removeV7Schema } from "./removal-schema-fixture";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -56,7 +57,7 @@ test("rejects manifest future versions, traversal, duplicates, omissions and ext
   try {
     const original = readFileSync(join(f.directory, "manifest.json"));
     for (const change of [
-      (m: any) => { m.formatVersion = 2; }, (m: any) => { m.databaseVersion = 6; },
+      (m: any) => { m.formatVersion = 2; }, (m: any) => { m.databaseVersion = 8; },
       (m: any) => { m.files[0].path = "../live.sqlite"; }, (m: any) => { m.files[0].path = "C:\\Windows\\file"; },
       (m: any) => { m.files.push(m.files[0]); }, (m: any) => { m.files.pop(); },
       (m: any) => { m.files[0].sha256 = "0".repeat(64); }, (m: any) => { m.files[0].bytes += 1; },
@@ -138,11 +139,11 @@ test("backup root junction is rejected without reading through or modifying its 
   } finally { f.close(); }
 });
 
-test("historical V3 and V4 backups stay read-only verifiable after V5 upgrade", async () => {
-  for (const version of [3, 4]) {
+test("historical V3, V4, V5 and V6 backups stay read-only verifiable after V7 upgrade", async () => {
+  for (const version of [3, 4, 5, 6]) {
     const f = await fixture();
     try {
-      await mutateDatabase(f.directory, "DROP TABLE prompt_history; " + (version === 3 ? "ALTER TABLE plans DROP COLUMN style_notes; " : "") + "PRAGMA user_version=" + version + ";");
+      await mutateDatabase(f.directory, removeV7Schema + (version < 6 ? "DROP TABLE script_history; " : "") + (version < 5 ? "DROP TABLE prompt_history; " : "") + (version === 3 ? "ALTER TABLE plans DROP COLUMN style_notes; " : "") + "PRAGMA user_version=" + version + ";");
       changeManifest(f.directory, manifest => { manifest.databaseVersion = version; });
       const before = await hashBackupFile(join(f.directory, "workspace.sqlite"));
       const result = await validateBackupDirectory(f.directory, decode);

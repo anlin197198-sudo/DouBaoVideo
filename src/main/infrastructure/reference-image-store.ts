@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, openSync, closeSync, fstatSync, readSync, constants } from "node:fs";
 import { basename, join } from "node:path";
 import type { ReferenceImage } from "../../shared/models";
 import { ApplicationError } from "../core/errors";
@@ -99,13 +99,31 @@ export class ReferenceImageStore {
     return existsSync(path) && statSync(path).isFile() ? path : null;
   }
 
-  /** Verify the exact bytes produced by the successful import decoder, not just a header. */
-  isAvailable(id: string): boolean {
+  /** Return the SAME bounded bytes whose hash matches the decoded import, never an unchecked path. */
+  readVerifiedBytes(id: string): Buffer | null {
+    if (!uuid.test(id)) return null;
+    const row = this.database.connection.prepare("SELECT file_name,content_hash FROM reference_images WHERE id=?").get(id);
+    if (!row || row.file_name !== `${id}.png`) return null;
+    let fd: number | undefined;
     try {
-      const path = this.pathFor(id);
-      if (!path || statSync(path).size > MAX_BYTES) return false;
-      const row = this.database.connection.prepare("SELECT content_hash FROM reference_images WHERE id = ?").get(id);
-      return !!row && createHash("sha256").update(readFileSync(path)).digest("hex") === row.content_hash;
-    } catch { return false; }
+      fd = openSync(join(this.directory, `${id}.png`), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      const before = fstatSync(fd);
+      if (!before.isFile() || before.size <= 0 || before.size > MAX_BYTES) return null;
+      const bytes = Buffer.alloc(before.size);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+        if (count === 0) return null;
+        offset += count;
+      }
+      // Reject growth without allocating or reading an unbounded file.
+      if (readSync(fd, Buffer.alloc(1), 0, 1, offset) !== 0) return null;
+      const after = fstatSync(fd);
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) return null;
+      return createHash("sha256").update(bytes).digest("hex") === row.content_hash ? bytes : null;
+    } catch { return null; }
+    finally { if (fd !== undefined) closeSync(fd); }
   }
+
+  isAvailable(id: string): boolean { return this.readVerifiedBytes(id) !== null; }
 }

@@ -14,9 +14,9 @@ import { ApplicationError } from "../core/errors";
 
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const imagePath = new RegExp(`^media/references/${uuid}\\.png$`, "i");
-const manifestSchema = z.object({
+export const backupManifestSchema = z.object({
   format: z.literal("DouBaoVideo-local-backup"), formatVersion: z.literal(1),
-  applicationVersion: z.string().min(1).max(100), databaseVersion: z.union([z.literal(3), z.literal(4), z.literal(5)]), createdAt: z.iso.datetime(),
+  applicationVersion: z.string().min(1).max(100), databaseVersion: z.union([z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(7)]), createdAt: z.iso.datetime(),
   files: z.array(z.object({ path: z.string().refine(path => path === "workspace.sqlite" || imagePath.test(path)),
     sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER) }).strict()).min(1).max(100000),
   excluded: z.array(z.string().max(200)).max(30), videoFilesIncluded: z.literal(false),
@@ -46,13 +46,13 @@ function schemaRows(database: DatabaseSync) {
   return database.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name").all();
 }
 const trustedSchemas = new Map<number, string>();
-function knownSchema(version: 3 | 4 | 5): string {
+function knownSchema(version: 3 | 4 | 5 | 6 | 7): string {
   if (!trustedSchemas.has(version)) trustedSchemas.set(version, trustedDatabaseSchema(version));
   return trustedSchemas.get(version)!;
 }
 
 /** Reads an allowlisted backup; SQLite only opens an isolated, disposable copy. */
-export async function validateBackupDirectory(selected: string, decode: ReferenceDecoder): Promise<BackupValidationResult> {
+export async function validateBackupDirectory(selected: string, decode: ReferenceDecoder): Promise<BackupValidationResult & { manifestSha256: string }> {
   let temporary: string | undefined;
   try {
     await ordinary(selected, true);
@@ -61,8 +61,8 @@ export async function validateBackupDirectory(selected: string, decode: Referenc
     await ordinary(join(root, "manifest.json"), false);
     if ((await lstat(join(root, "manifest.json"))).size > 8 * 1024 * 1024) fail("清单超过安全大小限制");
     const manifestBytes = await boundedRead(join(root, "manifest.json"), 8 * 1024 * 1024);
-    const parsed = manifestSchema.safeParse(JSON.parse(manifestBytes.toString("utf8")));
-    if (!parsed.success) fail("清单格式、版本或文件路径不受支持（仅支持本应用 V3／V4／V5 数据库备份）");
+    const parsed = backupManifestSchema.safeParse(JSON.parse(manifestBytes.toString("utf8")));
+    if (!parsed.success) fail("清单格式、版本或文件路径不受支持（仅支持本应用 V3／V4／V5／V6／V7 数据库备份）");
     const manifest = parsed.data;
     const names = manifest.files.map(file => file.path);
     if (new Set(names.map(path => path.toLowerCase())).size !== names.length || names.filter(name => name === "workspace.sqlite").length !== 1)
@@ -129,7 +129,7 @@ export async function validateBackupDirectory(selected: string, decode: Referenc
       const actual = await hashBackupFile(join(root, file.path));
       if (actual.sha256 !== file.sha256 || actual.bytes !== file.bytes) fail("验证期间文件变化");
     }
-    return { directory: root, createdAt: manifest.createdAt, databaseVersion: manifest.databaseVersion, imageCount: images.length,
+    return { manifestSha256: createHash("sha256").update(manifestBytes).digest("hex"), directory: root, createdAt: manifest.createdAt, databaseVersion: manifest.databaseVersion, imageCount: images.length,
       taskCount, filmRecordCount, totalBytes: manifest.files.reduce((sum, file) => sum + file.bytes, 0) };
   } catch (cause) {
     if (cause instanceof ApplicationError) throw cause;

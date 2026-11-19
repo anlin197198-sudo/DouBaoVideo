@@ -119,7 +119,7 @@ test("autosave debounces edits and normalizes only the saved latest draft", asyn
     await wait();
     assert.deepEqual(writes, ["abc"]);
     assert.equal(normalized?.script, "abc!");
-    assert.deepEqual(saver.state, { dirty: false, saving: false, error: null, conflict: false });
+    assert.deepEqual(saver.state, { dirty: false, saving: false, error: null, requestId: null, conflict: false });
   } finally { saver.dispose(); }
 });
 
@@ -201,4 +201,37 @@ test("disposal cancels queued save and does not emit late results", async () => 
   const queued = new WorkspaceAutosave(initial, async () => { writes++; return initial; }, () => {}, 5);
   queued.update({ ...initial.workspace, script: "queued" }); queued.dispose(); await wait();
   assert.equal(writes, 1);
+});
+
+
+test("save failure keeps a valid request ID with the draft, clears it on retry, and omits arbitrary payload IDs", async () => {
+  const initial = task(), id = "de305d54-75b4-431b-adb2-eb6b9e546014";
+  let failure: Error | null = Object.assign(new Error("本地保存失败"), { requestId: id });
+  const saver = new WorkspaceAutosave(initial, async (workspace, revision) => {
+    if (failure) throw failure;
+    return { ...initial, workspace, revision: revision + 1 };
+  }, () => {}, 10000);
+  try {
+    saver.update({ ...initial.workspace, script: "unsaved synthetic draft" });
+    assert.equal(await saver.flush(), false); assert.equal(saver.state.requestId, id);
+    assert.equal(saver.state.dirty, true); assert.equal(saver.workspace.script, "unsaved synthetic draft");
+    saver.update({ ...saver.workspace, script: "continued synthetic draft" });
+    assert.equal(saver.state.requestId, id);
+    failure = Object.assign(new Error("再次失败"), { requestId: "C:\\private\\secret-token" });
+    assert.equal(await saver.flush(true), false); assert.equal(saver.state.requestId, null);
+    assert.equal(saver.workspace.script, "continued synthetic draft");
+    failure = null; assert.equal(await saver.flush(true), true);
+    assert.equal(saver.state.requestId, null); assert.equal(saver.state.error, null); assert.equal(saver.state.dirty, false);
+  } finally { saver.dispose(); }
+});
+
+test("discarding an explicitly resolved save conflict removes the obsolete diagnostic request ID", async () => {
+  const initial = task(), id = "de305d54-75b4-431b-adb2-eb6b9e546014";
+  const saver = new WorkspaceAutosave(initial, async () => { throw Object.assign(new Error("冲突"), { code: "CONFLICT", requestId: id }); }, () => {}, 10000);
+  try {
+    saver.update({ ...initial.workspace, script: "draft" }); assert.equal(await saver.flush(), false);
+    assert.equal(saver.state.requestId, id); assert.equal(saver.state.conflict, true);
+    assert.equal(await saver.resolveConflict({ ...initial, revision: 4 }, "discard"), true);
+    assert.equal(saver.state.requestId, null); assert.equal(saver.state.error, null); assert.equal(saver.state.dirty, false);
+  } finally { saver.dispose(); }
 });

@@ -210,7 +210,7 @@ test("persists migrated records and idempotency receipts after closing the datab
     db.close();
     db = undefined;
     db = new ApplicationDatabase(path);
-    assert.equal(db.version, 5);
+    assert.equal(db.version, 7);
     assert.equal(new WorkspaceRepository(db).snapshot().tasks.length, 14);
     assert.equal(
       db.connection

@@ -1,13 +1,18 @@
+import type { TemporaryTemplateApply } from "../../../shared/temporary-template-apply";
+import type { InspectionSaveState } from "../../../shared/inspection-summary";
+import { PromptTemplatePreview } from "./PromptTemplatePreview";
 import type { PlanStyleContext } from "../../../shared/prompts";
 import { PromptHistory } from "./PromptHistory";
 import { useEffect, useState } from "react";
 import type { Plan, PromptKind, TaskWorkspace } from "../../../shared/models";
 import { editPrompt, findPrompt, PROMPT_LABELS, promptInput, reviewPrompt, planStyleValue, effectiveStyleNotes, inheritsStyleNotes, updatePromptSettings } from "../../../shared/prompts";
 
-export function PromptPanel({ taskId, savedRevision, workspace, planStyle, disabled, onChange, onClose, initialSelection = "video" }: {
+export function PromptPanel({ taskId, savedRevision, saveState, onApplyTemplate, workspace, planStyle, disabled, restoreDisabled, onChange, onClose, initialSelection = "video" }: {
   taskId: string;
   savedRevision: number;
-  workspace: TaskWorkspace; planStyle: PlanStyleContext; disabled: boolean;
+  saveState: InspectionSaveState;
+  onApplyTemplate: TemporaryTemplateApply;
+  workspace: TaskWorkspace; planStyle: PlanStyleContext; disabled: boolean; restoreDisabled: boolean;
   onChange: (workspace: TaskWorkspace) => void; onClose: () => void;
   initialSelection?: string;
 }) {
@@ -54,9 +59,10 @@ export function PromptPanel({ taskId, savedRevision, workspace, planStyle, disab
         onChange={event => onChange(editPrompt(workspace, planStyle, kind, shotId, event.target.value))} /></label>
       {stale && <button className="text-button" disabled={disabled} onClick={() => onChange(reviewPrompt(workspace, planStyle, kind, shotId))}>
         已核对当前输入，保留这项文字</button>}
+      <PromptTemplatePreview key={`${taskId}:${kind}:${shotId ?? ""}`} taskId={taskId} savedRevision={savedRevision} saveState={saveState} onApplyTemplate={onApplyTemplate} workspace={workspace} planStyle={planStyle} kind={kind} shotId={shotId} disabled={disabled} />
       <details><summary>查看当前输入与依赖</summary><pre>{input}</pre></details>
       {stale && <details><summary>查看上次核对输入</summary><pre>{current.inputSnapshot}</pre></details>}
-      <PromptHistory key={`${taskId}:${kind}:${shotId ?? ""}`} taskId={taskId} kind={kind} shotId={shotId} savedRevision={savedRevision} />
+      <PromptHistory key={`${taskId}:${kind}:${shotId ?? ""}`} taskId={taskId} kind={kind} shotId={shotId} savedRevision={savedRevision} workspace={workspace} planStyle={planStyle} restoreDisabled={restoreDisabled} onChange={onChange} />
       {!workspace.shots.length && <p className="muted">尚无镜头，可先写草稿；添加镜头后会提示重新核对。</p>}
     </>}
   </section>;

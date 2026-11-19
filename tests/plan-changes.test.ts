@@ -1,3 +1,4 @@
+import { removeV7Schema } from "./removal-schema-fixture";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -171,11 +172,117 @@ test("version 2 migration backfills historical task time and preserves reference
     db.connection.prepare("UPDATE tasks SET workspace_json=? WHERE id=?").run(original, task.id);
     const image = randomUUID();
     db.connection.prepare("INSERT INTO reference_images VALUES (?,?,?,'stored.png','hash',1,1,'old')").run(image, task.id, "source.png");
-    db.connection.exec("DROP TABLE prompt_history; ALTER TABLE plans DROP COLUMN style_notes; ALTER TABLE plans DROP COLUMN revision; ALTER TABLE tasks DROP COLUMN schedule_active; ALTER TABLE tasks DROP COLUMN execution_time; PRAGMA user_version=2;");
+    db.connection.exec(removeV7Schema + "DROP TABLE script_history; DROP TABLE prompt_history; ALTER TABLE plans DROP COLUMN style_notes; ALTER TABLE plans DROP COLUMN revision; ALTER TABLE tasks DROP COLUMN schedule_active; ALTER TABLE tasks DROP COLUMN execution_time; PRAGMA user_version=2;");
     db.close(); db = new ApplicationDatabase(path);
     const row = db.connection.prepare("SELECT * FROM tasks WHERE id=?").get(task.id)!;
-    assert.equal(db.version, 5); assert.equal(row.workspace_json, original);
+    assert.equal(db.version, 7); assert.equal(row.workspace_json, original);
     assert.equal(row.execution_time, initial.executionTime); assert.equal(row.schedule_active, 1);
     assert.equal(db.connection.prepare("SELECT id FROM reference_images").get()!.id, image);
   } finally { db?.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+// V6 histories belong to the original task, not to its current schedule slot.
+test("archived draft edits and both histories survive capacity/date replacement and reopen without reinstatement", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "schedule-history-")), path = join(dir, "workspace.sqlite");
+  const f = fixture(path);
+  const histories = () => ({
+    scripts: f.database.connection.prepare("SELECT * FROM script_history ORDER BY task_id,version").all(),
+    prompts: f.database.connection.prepare("SELECT * FROM prompt_history ORDER BY task_id,kind,shot_key,version").all(),
+  });
+  const apply = async (change: ReturnType<typeof input>) => {
+    const preview = f.repository.previewPlanEdit(change);
+    const request = { requestId: randomUUID(), command: "plans.applyEdit", input: { ...change, previewToken: preview.token,
+      removeTaskIds: [...preview.outside.map(t => t.id), ...preview.days.flatMap(d => d.editable.slice(0, d.remove).map(t => t.id))] } };
+    const result = await f.router.dispatch(request, { trusted: true }); assert.equal(result.ok, true);
+    const after = f.repository.snapshot(), rows = histories();
+    assert.deepEqual(await f.router.dispatch(request, { trusted: true }), result);
+    assert.deepEqual(f.repository.snapshot(), after); assert.deepEqual(histories(), rows);
+  };
+  try {
+    const id = f.tasks[0]!.id;
+    const save = async (script: string, text: string) => {
+      const task = f.repository.getTask(id);
+      const workspace = editPrompt({ ...task.workspace, script }, initial.style, "video", null, text);
+      assert.equal((await f.router.dispatch({ requestId: randomUUID(), command: "tasks.saveWorkspace",
+        input: { id, expectedRevision: task.revision, workspace } }, { trusted: true })).ok, true);
+    };
+    await save("归档前剧本", "归档前视频词");
+    const originalWorkspace = f.repository.getTask(id).workspace, originalHistory = histories();
+    await apply(input(f, { dailyCount: 1 }));
+    assert.equal(f.repository.getTask(id).scheduleActive, false);
+    assert.deepEqual(f.repository.getTask(id).workspace, originalWorkspace); assert.deepEqual(histories(), originalHistory);
+    await save("归档中继续编辑剧本", "归档中继续编辑视频词");
+    const archived = f.repository.getTask(id), savedHistory = histories();
+    assert.equal(savedHistory.scripts.length, 2); assert.equal(savedHistory.prompts.length, 2);
+    await apply(input(f));
+    const replacements = f.repository.snapshot().tasks.filter(t => t.scheduleActive && t.businessDate === archived.businessDate);
+    assert.deepEqual(replacements.map(t => t.sequence).sort(), [2, 3]);
+    assert.ok(replacements.every(t => t.id !== id));
+    await apply(input(f, { startDate: "2027-02-01" }));
+    await apply(input(f));
+    const returned = f.repository.snapshot().tasks.filter(t => t.scheduleActive && t.businessDate === archived.businessDate);
+    assert.deepEqual(returned.map(t => t.sequence).sort(), [4, 5]);
+    assert.ok(returned.every(t => !f.tasks.some(old => old.id === t.id) && t.workspace.script === ""));
+    assert.deepEqual(f.repository.getTask(id), archived); assert.deepEqual(histories(), savedHistory);
+    const taskRows = f.database.connection.prepare("SELECT * FROM tasks ORDER BY id").all();
+    f.database.close();
+    const reopened = new ApplicationDatabase(path);
+    try {
+      assert.deepEqual(reopened.connection.prepare("SELECT * FROM tasks ORDER BY id").all(), taskRows);
+      assert.deepEqual(reopened.connection.prepare("SELECT * FROM script_history ORDER BY task_id,version").all(), savedHistory.scripts);
+      assert.deepEqual(reopened.connection.prepare("SELECT * FROM prompt_history ORDER BY task_id,kind,shot_key,version").all(), savedHistory.prompts);
+    } finally { reopened.close(); }
+  } finally { if (f.database.connection.isOpen) f.database.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+function rawScheduleState(f: ReturnType<typeof fixture>) {
+  return Object.fromEntries(["plans", "tasks", "executions", "films", "script_history", "prompt_history", "command_receipts"]
+    .map(table => [table, f.database.connection.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+}
+
+test("archived edits, unsupported status, execution and film changes each invalidate preview atomically without receipts", async () => {
+  for (const changeType of ["archived-content", "status", "execution", "film"] as const) {
+    const f = fixture();
+    try {
+      const task = f.tasks[0]!;
+      if (changeType === "archived-content") f.database.connection.prepare("UPDATE tasks SET schedule_active=0 WHERE id=?").run(task.id);
+      const executionId = randomUUID();
+      if (changeType === "film") f.database.connection.prepare("INSERT INTO executions (id,task_id,operation,status,input_json,created_at,updated_at) VALUES (?,?,'video','completed','{}','old','old')").run(executionId, task.id);
+      const change = input(f, { dailyCount: 3, executionTime: "22:00" }), preview = f.repository.previewPlanEdit(change);
+      if (changeType === "archived-content") {
+        f.database.transaction(() => f.repository.saveWorkspace({ id: task.id, expectedRevision: task.revision, workspace: { ...task.workspace, script: "预览后编辑归档稿" } }));
+      } else if (changeType === "status") f.database.connection.prepare("UPDATE tasks SET status='future_unknown_status' WHERE id=?").run(task.id);
+      else if (changeType === "execution") f.database.connection.prepare("INSERT INTO executions (id,task_id,operation,status,input_json,created_at,updated_at) VALUES (?,?,'video','queued','{}','new','new')").run(executionId, task.id);
+      else f.database.connection.prepare("INSERT INTO films VALUES (?,?,?,'synthetic.mp4',1,'new')").run(randomUUID(), executionId, task.id);
+      const before = rawScheduleState(f), request = { requestId: randomUUID(), command: "plans.applyEdit", input: { ...change, previewToken: preview.token, removeTaskIds: [] } };
+      for (let retry = 0; retry < 2; retry++) {
+        const result = await f.router.dispatch(request, { trusted: true });
+        assert.equal(result.ok, false, changeType); if (!result.ok) assert.equal(result.error.code, "CONFLICT");
+        assert.deepEqual(rawScheduleState(f), before, changeType);
+      }
+    } finally { f.database.close(); }
+  }
+});
+
+test("unknown status and archived execution plus film rows stay immutable during timing changes and rejected style edits", async () => {
+  const f = fixture();
+  try {
+    const unknown = f.tasks[0]!, recorded = f.tasks[1]!, executionId = randomUUID();
+    f.database.connection.prepare("UPDATE tasks SET status='future_unknown_status' WHERE id=?").run(unknown.id);
+    f.database.connection.prepare("UPDATE tasks SET schedule_active=0 WHERE id=?").run(recorded.id);
+    f.database.connection.prepare("INSERT INTO executions (id,task_id,operation,status,input_json,created_at,updated_at) VALUES (?,?,'video','completed',?,'old','old')").run(executionId, recorded.id, JSON.stringify({ text: "不可重写输入" }));
+    f.database.connection.prepare("INSERT INTO films VALUES (?,?,?,'synthetic.mp4',1,'old')").run(randomUUID(), executionId, recorded.id);
+    const locked = () => ({ tasks: f.database.connection.prepare("SELECT * FROM tasks WHERE id IN (?,?) ORDER BY id").all(unknown.id, recorded.id),
+      executions: f.database.connection.prepare("SELECT * FROM executions").all(), films: f.database.connection.prepare("SELECT * FROM films").all() });
+    const before = locked(), change = input(f, { executionTime: "23:45" }), preview = f.repository.previewPlanEdit(change);
+    assert.equal((await f.router.dispatch({ requestId: randomUUID(), command: "plans.applyEdit", input: { ...change, previewToken: preview.token, removeTaskIds: [] } }, { trusted: true })).ok, true);
+    assert.deepEqual(locked(), before);
+    assert.equal(f.repository.getTask(f.tasks[2]!.id).executionTime, "23:45");
+    for (const changes of [{ style: "comic" as const }, { styleNotes: "不应改写锁定输入" }]) {
+      const edit = input(f, changes), p = f.repository.previewPlanEdit(edit), all = rawScheduleState(f);
+      assert.ok(p.blockers.length);
+      const result = await f.router.dispatch({ requestId: randomUUID(), command: "plans.applyEdit", input: { ...edit, previewToken: p.token, removeTaskIds: [] } }, { trusted: true });
+      assert.equal(result.ok, false); assert.deepEqual(rawScheduleState(f), all); assert.deepEqual(locked(), before);
+    }
+  } finally { f.database.close(); }
 });

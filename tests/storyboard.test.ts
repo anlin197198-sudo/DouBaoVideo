@@ -31,7 +31,7 @@ test("opens a script-only version 1 workspace without losing its content, viewpo
     f.database.connection.prepare("UPDATE tasks SET workspace_json = ?, revision = 4 WHERE id = ?")
       .run(JSON.stringify(legacy), task.id);
     const restored = f.repository.snapshot().tasks.find(item => item.id === task.id)!;
-    assert.equal(f.database.version, 5);
+    assert.equal(f.database.version, 7);
     assert.equal(restored.revision, 4);
     assert.deepEqual(restored.workspace, { ...legacy, shots: [], assets: [], assetLinks: [] });
   } finally { f.database.close(); }

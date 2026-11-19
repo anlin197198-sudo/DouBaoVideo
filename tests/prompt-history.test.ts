@@ -1,3 +1,4 @@
+import { removeV7Schema } from "./removal-schema-fixture";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -91,11 +92,11 @@ test("V4 upgrade records only current-version baseline with first-recorded time,
     const f = fixture(path); database = f.database; const task = f.tasks[0]!;
     const workspace = editPrompt(task.workspace, f.plan, "video", null, "已有第七版"); workspace.prompts![0]!.version = 7;
     database.connection.prepare("UPDATE tasks SET workspace_json=? WHERE id=?").run(JSON.stringify(workspace), task.id);
-    database.connection.exec("DROP TABLE prompt_history; PRAGMA user_version=4;"); database.close();
+    database.connection.exec(removeV7Schema + "DROP TABLE script_history; DROP TABLE prompt_history; PRAGMA user_version=4;"); database.close();
     const before = new Date().toISOString(); database = new ApplicationDatabase(path);
     const row = database.connection.prepare("SELECT * FROM prompt_history").get()!;
     assert.equal(row.version, 7); assert.equal(row.record_type, "baseline"); assert.equal(row.text, "已有第七版");
-    assert.ok(String(row.recorded_at) >= before); assert.equal(database.version, 5);
+    assert.ok(String(row.recorded_at) >= before); assert.equal(database.version, 7);
     assert.equal(database.connection.prepare("SELECT workspace_json FROM tasks WHERE id=?").get(task.id)!.workspace_json, JSON.stringify(workspace));
     database.close(); database = new ApplicationDatabase(path);
     assert.equal(database.connection.prepare("SELECT COUNT(*) AS n FROM prompt_history").get()!.n, 1);
@@ -106,7 +107,7 @@ test("invalid workspace aborts only history migration with no baseline table or 
   const directory = mkdtempSync(join(tmpdir(), "doubao-history-bad-")), path = join(directory, "workspace.sqlite");
   try {
     const f = fixture(path), id = f.tasks[0]!.id;
-    f.database.connection.exec("DROP TABLE prompt_history; PRAGMA user_version=4;");
+    f.database.connection.exec(removeV7Schema + "DROP TABLE script_history; DROP TABLE prompt_history; PRAGMA user_version=4;");
     f.database.connection.prepare("UPDATE tasks SET workspace_json='broken' WHERE id=?").run(id); f.database.close();
     assert.throws(() => new ApplicationDatabase(path), /历史版本迁移已回滚/);
     const raw = new DatabaseSync(path);

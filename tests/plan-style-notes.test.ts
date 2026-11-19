@@ -1,3 +1,4 @@
+import { removeV7Schema } from "./removal-schema-fixture";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -88,10 +89,10 @@ test("V3 migrates with empty plan notes, old task text preserved, V4 plan notes 
     const task = f.tasks[0]!;
     const workspace = { ...task.workspace, promptSettings: { style: null, notes: "保留旧说明" } };
     database.connection.prepare("UPDATE tasks SET workspace_json=? WHERE id=?").run(JSON.stringify(workspace), task.id);
-    database.connection.exec("DROP TABLE prompt_history; ALTER TABLE plans DROP COLUMN style_notes; PRAGMA user_version=3;");
+    database.connection.exec(removeV7Schema + "DROP TABLE script_history; DROP TABLE prompt_history; ALTER TABLE plans DROP COLUMN style_notes; PRAGMA user_version=3;");
     database.close(); database = new ApplicationDatabase(path);
     let repository = new WorkspaceRepository(database);
-    assert.equal(database.version, 5); assert.equal(repository.snapshot().plans[0]!.styleNotes, "");
+    assert.equal(database.version, 7); assert.equal(repository.snapshot().plans[0]!.styleNotes, "");
     assert.deepEqual(repository.getTask(task.id).workspace, workspace);
     const change = { id: f.plan.id, changes: input };
     const preview = repository.previewPlanEdit(change);

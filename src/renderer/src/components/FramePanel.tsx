@@ -1,3 +1,6 @@
+import { InspectionSummary } from "./InspectionSummary";
+import type { SaveState } from "../../../shared/workspace-autosave";
+import { imagePreview, type ImagePreviewState } from "../../../shared/image-preview-state";
 import type { PlanStyleContext } from "../../../shared/prompts";
 import { useEffect, useRef, useState } from "react";
 import type { FrameCandidate, FrameSlot, FrameWorkspace, ReferenceImage, TaskWorkspace, VisualStyle } from "../../../shared/models";
@@ -14,6 +17,8 @@ interface Props {
   images: ReferenceImage[];
   busy: boolean;
   dirty: boolean;
+  saveState: SaveState;
+  savedRevision: number;
   onChange: (workspace: TaskWorkspace) => void;
   onBusy: (busy: boolean) => void;
   onImport: (image: ReferenceImage) => void;
@@ -21,18 +26,19 @@ interface Props {
   onClose: () => void;
   onEditPrompt: (kind: ReviewPromptKind) => void;
   focusSlot?: FrameSlot;
+  imagePreviews: ImagePreviewState;
+  onPreviewEvent: (id: string, epoch: number, status: "ready" | "failed") => void;
+  onRefreshImages: (ids: string[]) => void;
 }
 
 const slotName = (slot: FrameSlot) => slot === "first" ? "首帧" : "尾帧";
 
-export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, onChange, onBusy, onImport, onConfirm, onClose, onEditPrompt, focusSlot }: Props) {
+export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, saveState, savedRevision, onChange, onBusy, onImport, onConfirm, onClose, onEditPrompt, focusSlot, imagePreviews, onPreviewEvent, onRefreshImages }: Props) {
   const slotRefs = useRef<Record<FrameSlot, HTMLElement | null>>({ first: null, last: null });
   useEffect(() => { if (focusSlot) { slotRefs.current[focusSlot]?.scrollIntoView({ block: "nearest" }); slotRefs.current[focusSlot]?.focus(); } }, [focusSlot]);
   const [error, setError] = useState<string | null>(null);
   const [operation, setOperation] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<FrameCandidate | null>(null);
-  const [loadState, setLoadState] = useState<Record<string, "ready" | "failed">>({});
-  const [refresh, setRefresh] = useState(0);
   const lock = useRef(false);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const frames = frameState(workspace);
@@ -40,7 +46,7 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
   const imageFor = (candidate: FrameCandidate | undefined) => candidate
     ? images.find(image => image.id === candidate.imageId && image.taskId === taskId) : undefined;
   const first = currentFrame(workspace, "first"), last = currentFrame(workspace, "last");
-  const imagesReady = [first, last].every(candidate => !!imageFor(candidate) && !!candidate && loadState[candidate.imageId] === "ready");
+  const imagesReady = [first, last].every(candidate => !!imageFor(candidate) && !!candidate && imagePreview(imagePreviews, candidate.imageId).status === "ready");
   const issue = confirmationIssue(workspace, planStyle);
   const blocker = dirty ? "正在等待自动保存。保存完成后即可在此确认；保存失败时请返回画布重试。"
     : issue?.message
@@ -103,14 +109,15 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
   function preview(candidate: FrameCandidate, current: boolean) {
     const image = imageFor(candidate);
     if (!image) return <p role="status" className="inline-error">图片记录不可用，请重新导入。</p>;
-    const failed = loadState[image.id] === "failed";
+    const { epoch, status } = imagePreview(imagePreviews, image.id);
+    const failed = status === "failed";
     return <>
       <button className="frame-preview-button" disabled={disabled || failed} onClick={() => setExpanded(candidate)}
         aria-label={`放大${slotName(candidate.slot)}：${image.originalName}`}>
-        <img key={`${candidate.id}-${refresh}`} src={`app://media/${image.id}?v=${refresh}`}
+        <img key={`${candidate.id}-${epoch}`} src={`app://media/${image.id}?v=${epoch}`}
           alt={`${slotName(candidate.slot)}${current ? "当前图片" : "候选图片"}：${image.originalName}`}
-          hidden={failed} onLoad={() => setLoadState(previous => ({ ...previous, [image.id]: "ready" }))}
-          onError={() => setLoadState(previous => ({ ...previous, [image.id]: "failed" }))} />
+          hidden={failed} onLoad={() => onPreviewEvent(image.id, epoch, "ready")}
+          onError={() => onPreviewEvent(image.id, epoch, "failed")} />
       </button>
       {failed && <p className="inline-error" role="status">无法读取这张静态图片，请重新导入或选择其他候选。</p>}
       <small>{image.originalName} · {image.width} × {image.height}</small>
@@ -147,7 +154,7 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
             {(candidate.inputSnapshot !== promptInput(workspace, planStyle, kind, null) || candidate.promptText !== (prompt?.text ?? ""))
               && <p className="review-notice">此候选来自较早的输入，请核对画面后再选择。</p>}
             <details><summary>导入时的提示词</summary><p className="frame-text">{candidate.promptText || "当时未填写图片提示词。"}</p></details>
-            <div className="frame-actions"><button className="text-button" disabled={disabled || candidate.id === current?.id || !imageFor(candidate) || loadState[candidate.imageId] !== "ready"}
+            <div className="frame-actions"><button className="text-button" disabled={disabled || candidate.id === current?.id || !imageFor(candidate) || imagePreview(imagePreviews, candidate.imageId).status !== "ready"}
               onClick={() => choose(slot, candidate.id)}>设为当前{slotName(slot)}</button>
               <button className="text-button" disabled={disabled} onClick={() => remove(candidate)}>移除候选</button></div>
           </div>)}
@@ -156,7 +163,7 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
       </article>;
     })}</div>
     <p className="helper">移除候选只移除本任务候选记录，已归档图片文件保留。原文件改名或移动不会影响归档图片。</p>
-    <button className="text-button" disabled={disabled} onClick={() => { setLoadState({}); setRefresh(value => value + 1); }}>重新检查图片文件</button>
+    <button className="text-button" disabled={disabled} onClick={() => { onRefreshImages(frames.candidates.map(candidate => candidate.imageId)); }}>重新检查图片文件</button>
     <fieldset disabled={disabled} className="frame-parameters"><legend>本地视频参数草稿</legend>
       <label>画面比例<select aria-label="画面比例" value={frames.parameters.aspectRatio} onChange={event => changeFrames({ ...frames,
         parameters: { ...frames.parameters, aspectRatio: event.target.value as FrameWorkspace["parameters"]["aspectRatio"] } })}>
@@ -167,6 +174,8 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
       <p className="helper">这些仅是本地制作意向，不代表豆包免费入口支持。官方比例、时长和生成模式限制尚未验证，不能据此提交。</p>
     </fieldset>
     <details><summary>查看视频提示词</summary><p className="frame-text">{findPrompt(workspace, "video", null)?.text || "尚未填写视频提示词。"}</p><button className="text-button" disabled={disabled} onClick={() => onEditPrompt("video")}>编辑视频提示词</button></details>
+    <InspectionSummary busy={disabled} workspace={workspace} planStyle={planStyle} taskId={taskId} savedRevision={savedRevision}
+      saveState={saveState} images={images} imagePreviews={imagePreviews} />
     <footer className="frame-review-actions">
       {blocker && <p className="helper" role="status">{blocker}</p>}
       {!dirty && imagesReady && issue?.promptKind && <button className="text-button" disabled={disabled} onClick={() => onEditPrompt(issue.promptKind!)}>{issue.actionLabel}</button>}
@@ -176,9 +185,9 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
     <dialog ref={dialogRef} className="frame-lightbox" aria-label="静态图片放大预览" onCancel={() => setExpanded(null)} onClose={() => setExpanded(null)}>
       {expanded && <><div className="editor-heading"><h2>{slotName(expanded.slot)}图片</h2>
         <button autoFocus className="text-button" onClick={() => setExpanded(null)}>关闭放大预览</button></div>
-        <img src={`app://media/${expanded.imageId}?v=${refresh}`} alt={`${slotName(expanded.slot)}放大预览`}
-          onError={() => setLoadState(previous => ({ ...previous, [expanded.imageId]: "failed" }))} />
-        {loadState[expanded.imageId] === "failed" && <p role="alert">图片无法读取，请关闭后重新导入。</p>}</>}
+        <img key={`${expanded.imageId}-${imagePreview(imagePreviews, expanded.imageId).epoch}`} src={`app://media/${expanded.imageId}?v=${imagePreview(imagePreviews, expanded.imageId).epoch}`} alt={`${slotName(expanded.slot)}放大预览`}
+          onError={() => onPreviewEvent(expanded.imageId, imagePreview(imagePreviews, expanded.imageId).epoch, "failed")} />
+        {imagePreview(imagePreviews, expanded.imageId).status === "failed" && <p role="alert">图片无法读取，请关闭后重新导入。</p>}</>}
     </dialog>
   </section>;
 }

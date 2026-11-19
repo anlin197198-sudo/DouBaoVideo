@@ -1,0 +1,31 @@
+# Keep the application name stable: Electron uses it for the default userData path.
+appId: com.doubaovideo.desktop
+productName: doubao-video
+executableName: DouBaoVideo
+directories:
+  output: dist/windows
+files:
+  - out/main/**
+  - out/preload/**
+  - out/renderer/**
+  - package.json
+# Windows sharp uses the lockfile-pinned Windows N-API binary installed in the staging app.
+# Do not rebuild the staged binary for the host platform.
+asarUnpack:
+  - node_modules/@img/sharp-win32-x64/**
+npmRebuild: false
+forceCodeSigning: false
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: DouBaoVideo-${version}-${arch}-Setup.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: DouBaoVideo
+  uninstallDisplayName: DouBaoVideo
+  deleteAppDataOnUninstall: false

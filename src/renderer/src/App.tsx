@@ -1,3 +1,5 @@
+import { FilmsPage } from "./pages/FilmsPage";
+import { canOpenTrayQueue } from "../../shared/tray-navigation";
 import type { PlanListView } from "../../shared/plan-list-view";
 import { useEffect, useState } from "react";
 import type {
@@ -11,6 +13,7 @@ import { command } from "./api/client";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { Modal } from "./components/Modal";
 import { PlansPage } from "./pages/PlansPage";
+import { ExecutionRecoveryPage } from "./pages/ExecutionRecoveryPage";
 import { AccountsPage } from "./pages/AccountsPage";
 import { TaskCanvas } from "./pages/TaskCanvas";
 import { BackupPanel } from "./components/BackupPanel";
@@ -24,6 +27,9 @@ const pages: { id: Page; label: string }[] = [
 ];
 
 export function App() {
+  const [queueRequested, setQueueRequested] = useState(false);
+  const [queueNotice, setQueueNotice] = useState("");
+  useEffect(() => window.desktop?.onQueueRequested?.(() => { setQueueRequested(true); setQueueNotice(""); }), []);
   const [page, setPage] = useState<Page>("plans");
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [info, setInfo] = useState<ApplicationInfo | null>(null);
@@ -36,6 +42,14 @@ export function App() {
   const selectedTask = snapshot?.tasks.find(
     (task) => task.id === selectedTaskId,
   );
+
+  function openRequestedQueue() {
+    if (!canOpenTrayQueue({ hasCanvas: selectedTaskId !== null, hasDialog: !!document.querySelector("dialog[open]"), busy: busy || backupBusy, ready: snapshot !== null })) {
+      setQueueNotice("请先完成或关闭当前编辑，并等待保存完成；画布请通过返回按钮安全退出。");
+      return;
+    }
+    setPage("queue"); setQueueRequested(false); setQueueNotice("");
+  }
 
   async function reload() {
     const [workspace, application] = await Promise.all([
@@ -96,6 +110,13 @@ export function App() {
           工作区信息
         </button>
       </header>
+      {queueRequested && <section className="review-notice" role="status" aria-label="托盘队列请求">
+        <p>托盘请求查看任务队列。当前页面和编辑保持不变；请先完成当前操作，再打开队列。调度与派发尚未接入。</p>
+        <button className="text-button" disabled={busy || backupBusy || !!selectedTaskId || !snapshot} onClick={openRequestedQueue}>查看任务队列</button>
+        <button className="text-button" onClick={() => { setQueueRequested(false); setQueueNotice(""); }}>取消请求</button>
+        {selectedTaskId && <p className="helper">请先使用画布「返回」保存并退出，不会因托盘请求丢弃草稿。</p>}
+        {queueNotice && <p>{queueNotice}</p>}
+      </section>}
       <div className={"application-body" + (selectedTask ? " full-width" : "")}>
         {!selectedTask && (
           <aside className="sidebar">
@@ -211,30 +232,8 @@ export function App() {
                   }}
                 />
               )}
-              {page === "queue" && (
-                <>
-                  <div className="page-heading">
-                    <h1>任务队列</h1>
-                  </div>
-                  <div className="empty">
-                    <h2>等待接入真实生成任务</h2>
-                    <p>
-                      本地任务已保存。生成执行、账号派发和每日调度将在后续阶段接入。
-                    </p>
-                  </div>
-                </>
-              )}
-              {page === "films" && (
-                <>
-                  <div className="page-heading">
-                    <h1>成片</h1>
-                  </div>
-                  <div className="empty">
-                    <h2>视频生成后，保存到这里</h2>
-                    <p>真实成片下载与播放将在单任务生成阶段接入。</p>
-                  </div>
-                </>
-              )}
+              {page === "queue" && <ExecutionRecoveryPage snapshot={snapshot} />}
+              {page === "films" && <FilmsPage snapshot={snapshot} />}
             </>
           )}
         </main>

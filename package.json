@@ -12,7 +12,9 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "build": "npm run typecheck && electron-vite build",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "package:win": "node packaging/build-windows.mjs",
+    "audit:win": "node packaging/audit-windows.mjs"
   },
   "dependencies": {
     "@xyflow/react": "13.0.2",
@@ -22,11 +24,13 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "6.3.0",
     "electron": "45.3.4",
+    "electron-builder": "26.18.1",
     "electron-vite": "6.0.0",
     "tsx": "4.23.15",
     "typescript": "7.0.2",

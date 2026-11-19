@@ -8,7 +8,7 @@ import type {
 } from "../../shared/bridge";
 import { commandSchemas, requestEnvelope } from "../../shared/validation";
 import type { ApplicationDatabase } from "../infrastructure/database";
-import type { Logger } from "../core/logger";
+import type { Logger, CommandLog } from "../core/logger";
 import { ApplicationError, normalizeError } from "../core/errors";
 
 interface Route {
@@ -79,7 +79,7 @@ export class CommandRouter {
       const data = route.transactional
         ? this.executeMutation(requestId, command, parsed.data, route)
         : await route.execute(parsed.data);
-      this.logger.command({
+      this.logSafely({
         requestId,
         command,
         outcome: "success",
@@ -88,7 +88,7 @@ export class CommandRouter {
       return { ok: true, data, requestId };
     } catch (error) {
       const normalized = normalizeError(error);
-      this.logger.command({
+      this.logSafely({
         requestId,
         command,
         outcome: "error",
@@ -101,6 +101,14 @@ export class CommandRouter {
         requestId,
       };
     }
+  }
+
+  private logSafely(entry: CommandLog): void {
+    try {
+      // Third-party/test sinks can throw or unexpectedly return a rejected promise.
+      // Logging cannot change a committed result or mask the original command failure.
+      void Promise.resolve(this.logger.command(entry)).catch(() => {});
+    } catch { /* Best-effort metadata only; never print the arbitrary sink error. */ }
   }
 
   private executeMutation(
