@@ -30,7 +30,7 @@ test("V7 film metadata restores without video bytes, path projection or implicit
   const bytes = Buffer.from("Synthetic archived bytes; no actual codec or provider involved.");
   writeFileSync(sourcePath, bytes);
   db.connection.prepare("INSERT INTO executions(id,task_id,operation,status,input_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)")
-   .run(executionId, task.id, "video", "completed", "{}", "2026-11-19T00:00:00.000Z", "2026-11-19T00:00:00.000Z");
+   .run(executionId, task.id, "local-import", "recorded", "{}", "2026-11-19T00:00:00.000Z", "2026-11-19T00:00:00.000Z");
   db.connection.prepare("INSERT INTO films(id,execution_id,task_id,file_path,version,created_at) VALUES(?,?,?,?,?,?)")
    .run(filmId, executionId, task.id, sourcePath, 2, "2026-11-19T01:00:00.000Z");
   const business = (database: ApplicationDatabase) => Object.fromEntries(["plans", "tasks", "executions", "films"].map(table => [table, database.connection.prepare(`SELECT * FROM ${table} ORDER BY id`).all()]));
@@ -59,11 +59,12 @@ test("V7 film metadata restores without video bytes, path projection or implicit
   const snapshot = new WorkspaceRepository(restored).snapshot();
   assert.deepEqual(snapshot.films, originalSnapshot.films);
   assert.equal(snapshot.films[0]!.id, filmId); assert.equal(snapshot.films[0]!.version, 2);
+  assert.equal(snapshot.films[0]!.provenance, "local-import");
   assert.doesNotMatch(JSON.stringify(snapshot.films), /PRIVATE_SOURCE_ONLY|filePath|file_path/);
   const modulePath = "../src/renderer/src/pages/FilmsPage.tsx";
   const Page = (await import(modulePath)).FilmsPage as ComponentType<{ snapshot: Pick<WorkspaceSnapshot, "films" | "tasks"> }>;
   const html = renderToStaticMarkup(createElement(Page, { snapshot }));
-  assert.match(html, /合成历史成片/); assert.match(html, /版本 2/); assert.match(html, /文件可读性及媒体有效性未验证/);
+  assert.match(html, /合成历史成片/); assert.match(html, /版本 2/); assert.match(html, /记录来源：本地导入/); assert.match(html, /文件可读性及媒体有效性未验证/);
   assert.doesNotMatch(html, /PRIVATE_SOURCE_ONLY|<video|<a\s/); assert.ok(!html.includes(sourcePath));
   // Even an existing source file and a restored film row grant no read authority.
   const lookup = await createRegisteredVideoLookup(join(live, "media", "videos"), []);

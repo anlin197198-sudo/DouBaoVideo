@@ -4,9 +4,9 @@ import { imagePreview, type ImagePreviewState } from "../../../shared/image-prev
 import type { PlanStyleContext } from "../../../shared/prompts";
 import { useEffect, useRef, useState } from "react";
 import type { FrameCandidate, FrameSlot, FrameWorkspace, ReferenceImage, TaskWorkspace, VisualStyle } from "../../../shared/models";
-import { addFrameCandidate, chooseFrame, confirmationIssue, currentFrame, frameState, hasCurrentConfirmation } from "../../../shared/frames";
+import { addFrameCandidate, chooseFrame, confirmationIssue, currentFrame, frameCandidateHasOlderInput, frameState, hasCurrentConfirmation } from "../../../shared/frames";
 import type { ReviewPromptKind } from "../../../shared/frames";
-import { findPrompt, promptInput } from "../../../shared/prompts";
+import { findPrompt } from "../../../shared/prompts";
 import { command } from "../api/client";
 import "./FramePanel.css";
 
@@ -142,7 +142,9 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
         <div className="editor-heading"><h3>{slotName(slot)} · {slot === "first" ? "开场画面" : "结束画面"}</h3>
           <button className="text-button" disabled={disabled || frames.candidates.length >= 100} onClick={() => { void importImage(slot); }}>导入{slotName(slot)}</button></div>
         {current ? <div className="frame-current">{preview(current, true)}
-          <p className="helper">本地导入 · {current.createdAt} · 图片提示词版本 {current.promptVersion === null ? "未保存或未设置" : `v${current.promptVersion}`}</p>
+          <p className="helper">本地导入 · {current.createdAt} · 导入时图片提示词版本 {current.promptVersion === null ? "未保存或未设置" : `v${current.promptVersion}`}</p>
+          {frameCandidateHasOlderInput(workspace, planStyle, current)
+            && <p className="review-notice" role="status">当前{slotName(slot)}来自较早的输入，请核对画面。</p>}
           <button className="text-button" disabled={disabled} onClick={() => choose(slot, null)}>取消当前{slotName(slot)}选择</button>
         </div> : <p className="frame-empty">尚未选择{slotName(slot)}。导入后在候选中点击“设为当前{slotName(slot)}”。</p>}
         <details><summary>当前图片提示词</summary><p className="frame-text">{prompt?.text || "尚未填写，可编辑图片提示词。"}</p><button className="text-button" disabled={disabled} onClick={() => onEditPrompt(kind)}>编辑{slotName(slot)}提示词</button></details>
@@ -151,7 +153,7 @@ export function FramePanel({ workspace, planStyle, taskId, images, busy, dirty, 
             {candidate.id !== current?.id && preview(candidate, false)}
             <p>{candidate.id === current?.id ? "当前图片 · " : ""}本地导入 · {candidate.createdAt}</p>
             <small>导入时图片提示词版本：{candidate.promptVersion === null ? "未保存或未设置" : `v${candidate.promptVersion}`}</small>
-            {(candidate.inputSnapshot !== promptInput(workspace, planStyle, kind, null) || candidate.promptText !== (prompt?.text ?? ""))
+            {frameCandidateHasOlderInput(workspace, planStyle, candidate)
               && <p className="review-notice">此候选来自较早的输入，请核对画面后再选择。</p>}
             <details><summary>导入时的提示词</summary><p className="frame-text">{candidate.promptText || "当时未填写图片提示词。"}</p></details>
             <div className="frame-actions"><button className="text-button" disabled={disabled || candidate.id === current?.id || !imageFor(candidate) || imagePreview(imagePreviews, candidate.imageId).status !== "ready"}

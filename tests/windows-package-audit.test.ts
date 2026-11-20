@@ -18,7 +18,7 @@ function syntheticPE(dll: boolean, machine = 0x8664) {
   return bytes;
 }
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, includeProbe = true, includeManifest = true) {
   const root = await mkdtemp(join(tmpdir(), "dvb-package-audit-"));
   const out = join(root, "out");
   const directory = join(root, "win-unpacked");
@@ -28,7 +28,10 @@ async function fixture(t: TestContext) {
     uncache(archive);
     await rm(root, { recursive: true, force: true });
   });
-  for (const relative of ["main/index.js", "preload/index.cjs", "renderer/index.html", "renderer/assets/index-x.js"]) {
+  const bundleFiles = ["main/index.js", "preload/index.cjs", "renderer/index.html", "renderer/assets/index-x.js"];
+  if (includeProbe) bundleFiles.push("renderer/f17-video-probe.html", "renderer/assets/f17-video-probe-x.js");
+  if (includeProbe && includeManifest) bundleFiles.push("renderer/f17-video-probe-assets.json");
+  for (const relative of bundleFiles) {
     const output = join(out, relative);
     await mkdir(dirname(output), { recursive: true });
     await writeFile(output, relative);
@@ -47,7 +50,7 @@ async function fixture(t: TestContext) {
 
 test("package audit checks all current bundled bytes and x64 Windows native file headers", async (t) => {
   const { out, directory } = await fixture(t);
-  assert.deepEqual(auditWindowsDirectory(directory, out), { bundles: 4, nativeLibraries: 3 });
+  assert.deepEqual(auditWindowsDirectory(directory, out), { bundles: 7, nativeLibraries: 3 });
   await writeFile(join(out, "main", "index.js"), "main/index.xx");
   assert.throws(() => auditWindowsDirectory(directory, out), /Packaged bytes differ.*main\/index\.js/);
   await writeFile(join(out, "renderer", "assets", "index-another.js"), "from another build");
@@ -76,4 +79,14 @@ test("package audit rejects truncated ASAR body and an oversized header before r
   malformed.writeUInt32LE(0xffffffff, 4);
   await writeFile(archive, malformed);
   assert.throws(() => auditWindowsDirectory(directory, out), /Invalid ASAR header bounds/);
+});
+
+test("package audit rejects a matching archive and output when the private probe entry was not built", async (t) => {
+  const { out, directory } = await fixture(t, false);
+  assert.throws(() => auditWindowsDirectory(directory, out), /dedicated F17 video probe entry, manifest, or bundle/);
+});
+
+test("package audit rejects a probe built without its verified resource manifest", async (t) => {
+  const { out, directory } = await fixture(t, true, false);
+  assert.throws(() => auditWindowsDirectory(directory, out), /dedicated F17 video probe entry, manifest, or bundle/);
 });

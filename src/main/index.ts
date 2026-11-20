@@ -5,7 +5,8 @@ import { storyboardApprovalOwner } from "./application/storyboard-dialog-owner";
 import { createApplicationServices } from "./application/services";
 import { DeepSeekPlanner, readDeepSeekPlannerOptions } from "./providers/deepseek-planner";
 import { FileLogger } from "./core/logger";
-import { ApplicationDatabase } from "./infrastructure/database";
+import type { ApplicationDatabase } from "./infrastructure/database";
+import { openWorkspaceWithSafetyCopy } from "./infrastructure/pre-migration-snapshot";
 import { createApplicationPaths } from "./infrastructure/paths";
 import { SqliteAccountSessionFence } from "./infrastructure/account-session-fence";
 import { AccountSessionManager } from "./electron/account-sessions";
@@ -105,7 +106,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       const paths = createApplicationPaths(app.getPath("userData"));
-      database = new ApplicationDatabase(paths.database);
+      database = await openWorkspaceWithSafetyCopy(paths.database);
       const referenceStore = new ReferenceImageStore(database, paths.media, decodeReference);
       const backups = new WorkspaceBackup({ database, mediaDirectory: paths.media, applicationVersion: app.getVersion(), decode: decodeReference,
         chooseDirectory: async () => {

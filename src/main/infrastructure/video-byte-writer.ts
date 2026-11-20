@@ -10,10 +10,14 @@ const same = (a: Identity, b: Identity) => a.dev === b.dev && a.ino === b.ino;
 export interface VideoByteWriteInput {
   directory: string; identity: VideoBasenameInput; expectedBytes: number; expectedSha256: string;
   chunks: AsyncIterable<Uint8Array>;
+  /** Trusted synchronous gate only. Cannot cancel a link operation already begun. */
+  beforePublish?: () => boolean;
 }
 export interface VideoByteWriteResult {
+  /** Original owned publication identity, not a fresh pathname observation. Absent unless clean publication. */
+  publishedIdentity?: Readonly<{dev:number;ino:number;parentDev:number;parentIno:number;size:number;mtimeMs:number;ctimeMs:number}>;
   status: "published" | "published-cleanup-failed" | "not-published" | "publication-uncertain";
-  reason: "VERIFIED_BYTES_PUBLISHED" | "WRITE_OR_VERIFY_FAILED" | "EXCLUSIVE_PUBLICATION_FAILED" | "PUBLICATION_NOT_CONFIRMED" | "TEMPORARY_CLEANUP_FAILED";
+  reason: "VERIFIED_BYTES_PUBLISHED" | "WRITE_OR_VERIFY_FAILED" | "EXCLUSIVE_PUBLICATION_FAILED" | "PUBLICATION_NOT_CONFIRMED" | "TEMPORARY_CLEANUP_FAILED" | "PUBLICATION_GUARD_REJECTED";
   target: string; temporary: string | null; cleanup: "removed" | "not-created" | "retained" | "unknown";
   automaticRetry: false; mediaValidated: false; databaseCompleted: false;
 }
@@ -28,7 +32,7 @@ export async function writeVerifiedVideoBytes(input: VideoByteWriteInput,
   if (typeof input.directory !== "string" || !input.directory || !Number.isSafeInteger(input.expectedBytes) || input.expectedBytes <= 0 || input.expectedBytes > MAX_VIDEO_WRITE_BYTES
     || typeof input.expectedSha256 !== "string" || !/^[0-9a-f]{64}$/.test(input.expectedSha256)) throw new Error("视频字节写入参数无效。");
   // Capture metadata before the first await; stream content is verified against this exact contract.
-  const parent = resolve(input.directory), target = join(parent, name), expectedBytes = input.expectedBytes, expectedHash = input.expectedSha256, chunks = input.chunks;
+  const parent = resolve(input.directory), target = join(parent, name), expectedBytes = input.expectedBytes, expectedHash = input.expectedSha256, chunks = input.chunks, beforePublish = input.beforePublish;
   let temporary: string | null = null, owned: Identity | null = null, parentIdentity: Identity | null = null;
   let handle: Awaited<ReturnType<typeof open>> | null = null, publishAttempted = false, linkResolved = false, created = false, published = false, uncertain = false;
   let reason: VideoByteWriteResult["reason"] = "WRITE_OR_VERIFY_FAILED";
@@ -42,7 +46,19 @@ export async function writeVerifiedVideoBytes(input: VideoByteWriteInput,
     const stat = await lstat(temporary!);
     if (!owned || !stat.isFile() || stat.isSymbolicLink() || !same(stat, owned)) throw new Error("TEMP_CHANGED");
   };
+  const checkPublicationGuard = () => {
+    if (beforePublish === undefined) return;
+    try {
+      if (typeof beforePublish !== "function") throw new Error();
+      const answer: unknown = beforePublish();
+      // Wrong runtime async input is rejected, but do not leave its rejection unobserved.
+      if (answer instanceof Promise) void answer.catch(() => undefined);
+      if (answer !== true) throw new Error();
+    }
+    catch { reason = "PUBLICATION_GUARD_REJECTED"; throw new Error("PUBLICATION_GUARD_REJECTED"); }
+  };
   try {
+    checkPublicationGuard();
     parentIdentity = await parentCurrent();
     temporary = join(parent, `.doubao-video-${randomUUID()}.tmp`);
     handle = await open(temporary, "wx", 0o600); created = true; owned = await handle.stat();
@@ -59,6 +75,7 @@ export async function writeVerifiedVideoBytes(input: VideoByteWriteInput,
     if (written !== expectedBytes || hash.digest("hex") !== expectedHash || (await handle.stat()).size !== expectedBytes) throw new Error("BYTE_MISMATCH");
     await handle.sync(); await handle.close(); handle = null;
     await tempCurrent();
+    checkPublicationGuard();
     publishAttempted = true; reason = "EXCLUSIVE_PUBLICATION_FAILED";
     await (io.link ?? link)(temporary, target); linkResolved = true;
     const final = await lstat(target);
@@ -90,6 +107,19 @@ export async function writeVerifiedVideoBytes(input: VideoByteWriteInput,
   }
   const status = published ? (cleanup === "retained" || cleanup === "unknown") ? "published-cleanup-failed" : "published" : uncertain ? "publication-uncertain" : "not-published";
   if ((cleanup === "retained" || cleanup === "unknown") && !uncertain) reason = "TEMPORARY_CLEANUP_FAILED";
-  return Object.freeze({ status, reason, target, temporary: cleanup === "retained" || cleanup === "unknown" ? temporary : null, cleanup,
+  let publishedIdentity: VideoByteWriteResult["publishedIdentity"];
+  if (status === "published" && cleanup === "removed" && owned && parentIdentity && owned.ino > 0 && parentIdentity.ino > 0
+    && [owned.dev,owned.ino,parentIdentity.dev,parentIdentity.ino].every(value=>Number.isSafeInteger(value)&&value>=0)) {
+    try {
+      await parentCurrent();
+      const baseline = await lstat(target);
+      if (baseline.isFile() && !baseline.isSymbolicLink() && baseline.nlink === 1 && same(baseline,owned)
+        && baseline.size === expectedBytes && [baseline.mtimeMs,baseline.ctimeMs].every(value=>Number.isFinite(value)&&value>=0)) {
+        publishedIdentity = Object.freeze({dev:owned.dev,ino:owned.ino,parentDev:parentIdentity.dev,parentIno:parentIdentity.ino,
+          size:baseline.size,mtimeMs:baseline.mtimeMs,ctimeMs:baseline.ctimeMs});
+      }
+    } catch { /* Published remains truthful; unavailable post-cleanup baseline grants no proof. */ }
+  }
+  return Object.freeze({ ...(publishedIdentity ? {publishedIdentity} : {}), status, reason, target, temporary: cleanup === "retained" || cleanup === "unknown" ? temporary : null, cleanup,
     automaticRetry: false, mediaValidated: false, databaseCompleted: false });
 }

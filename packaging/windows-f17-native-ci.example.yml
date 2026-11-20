@@ -1,0 +1,43 @@
+# Inactive reference only. Do not copy to .github/workflows without owner approval.
+name: F17 isolated native MP4 import validation
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-probe:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Check out the selected revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install locked development or test dependencies
+        shell: pwsh
+        run: npm.cmd ci
+
+      - name: Run regressions
+        shell: pwsh
+        run: npm.cmd test
+
+      - name: Build isolated probe
+        shell: pwsh
+        run: npm.cmd run build:f17:native-smoke
+
+      - name: Run the synthetic full-import probe
+        shell: pwsh
+        run: npm.cmd run smoke:f17:native -- --run --full-import
+
+      # No installer, screenshots, workspace, or media artifact is uploaded.
+      # Native probe uses only the built-in synthetic clip and an isolated synthetic task and database.

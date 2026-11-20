@@ -7,7 +7,9 @@
     "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "noEmit": true
   },
   "include": [
@@ -15,6 +17,8 @@
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "electron.probe-smoke.config.ts",
+    "scripts/f17-native-probe-main.ts"
   ]
 }

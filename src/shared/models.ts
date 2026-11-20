@@ -152,6 +152,8 @@ export interface Execution {
 }
 
 export interface Film {
+  /** Classification of recorded provenance only; never implies media availability or remote success. */
+  provenance: "local-import" | "unknown";
   id: string;
   taskId: string;
   version: number | null;

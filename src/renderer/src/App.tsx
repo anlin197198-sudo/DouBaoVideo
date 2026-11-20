@@ -196,9 +196,9 @@ export function App() {
                   busy={busy}
                   view={planView}
                   onViewChange={setPlanView}
-                  onCreate={(input) =>
-                    perform(() => command("plans.create", input))
-                  }
+                  onCreate={async (input, requestId) => ({
+                    planId: (await command("plans.create", input, requestId)).plan.id,
+                  })}
                   onToggle={(plan) => {
                     void perform(() =>
                       command("plans.setEnabled", {

@@ -1,7 +1,9 @@
 import { registeredVideoRange } from "./registered-video-range";
 
 export interface RegisteredVideoSource {
-  /** Exact positive size from a trusted read handle after media/identity validation. */
+  /** Exact positive size from a byte/identity-verified trusted read handle.
+   * Transport is not media certification: normal playback requires media validation;
+   * a separately owner/document-scoped probe may test an undecoded staged candidate. */
   byteLength: number;
   /** Transfer ownership of the verified source to a stream; it owns close on EOF/error/cancel. */
   stream(start: number, endInclusive: number): ReadableStream<Uint8Array<ArrayBuffer>>;
@@ -14,7 +16,8 @@ const exactVideoUrl = /^app:\/\/video\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const privateHeaders = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
 
 /** Dormant protocol policy: no disk paths, no app-scheme wiring and no production registration.
- * The injected layer must only resolve explicitly verified app-owned movies, never legacy path rows. */
+ * The injected layer must only resolve explicitly authorized app-owned byte sources, never legacy path rows.
+ * A probe capability authorizes decoding inspection only; it does not certify a playable movie. */
 export async function registeredVideoResponse(
   request: Pick<Request, "url" | "method" | "headers">, lookup: RegisteredVideoLookup,
 ): Promise<Response> {

@@ -39,3 +39,17 @@ test("postpublication cleanup failure and lost link response retain published ta
  const long=input(dir);long.identity.title="汉".repeat(2000);if(Buffer.byteLength(buildVideoBasename(long.identity))>255){const r=await writeVerifiedVideoBytes(long,{link:async()=>{throw Object.assign(Error("synthetic name limit"),{code:"ENAMETOOLONG"})}});assert.equal(r.status,"publication-uncertain");assert.equal(r.cleanup,"removed");}
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test("clean publication returns frozen original file and parent identities only; ambiguous outcomes omit proof",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),"byte-proof-"));try{
+ const result=await writeVerifiedVideoBytes(input(dir)),file=await lstat(result.target),parent=await lstat(dir);
+ assert.equal(result.status,"published");assert.deepEqual(result.publishedIdentity,{dev:file.dev,ino:file.ino,parentDev:parent.dev,parentIno:parent.ino,size:file.size,mtimeMs:file.mtimeMs,ctimeMs:file.ctimeMs});assert.ok(Object.isFrozen(result.publishedIdentity));
+ const rejected=await writeVerifiedVideoBytes({...input(dir),expectedSha256:"0".repeat(64)});assert.equal(Object.hasOwn(rejected,"publishedIdentity"),false);
+ const uncertain=await writeVerifiedVideoBytes(input(dir),{link:async()=>{throw Object.assign(Error(),{code:"EIO"});}});assert.equal(uncertain.status,"publication-uncertain");assert.equal(Object.hasOwn(uncertain,"publishedIdentity"),false);
+ const retained=await writeVerifiedVideoBytes(input(dir),{unlink:async()=>{throw Error();}});assert.equal(retained.status,"published-cleanup-failed");assert.equal(Object.hasOwn(retained,"publishedIdentity"),false);
+ let observedTarget="";
+ const changedAfterCleanup=await writeVerifiedVideoBytes(input(dir),{link:async(source,target)=>{observedTarget=String(target);await link(source,target);},unlink:async(path)=>{await unlink(path);await writeFile(observedTarget,"different size");}});
+ assert.equal(changedAfterCleanup.status,"published");assert.equal(changedAfterCleanup.cleanup,"removed");assert.equal(Object.hasOwn(changedAfterCleanup,"publishedIdentity"),false);
+
+ }finally{await rm(dir,{recursive:true,force:true});}
+});

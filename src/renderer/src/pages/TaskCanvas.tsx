@@ -1,3 +1,4 @@
+import { applySavedShotVideoDraft, type ApplySavedShotVideoDraft } from "../../../shared/saved-shot-video-draft";
 import { viewportForTarget } from "../../../shared/canvas-focus";
 import { command } from "../api/client";
 import { acceptScriptReuseDraft, type ScriptReusePreview } from "../../../shared/script-reuse-draft";
@@ -202,6 +203,17 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
     setWorkspace(positioned); controller.update(positioned); return true;
   };
 
+  const applyVideoDraft: ApplySavedShotVideoDraft = (draft, text) => {
+    const live = applyLive.current;
+    if (live.working) return false;
+    const state = controller.state;
+    const next = applySavedShotVideoDraft({ taskId: live.taskId, revision: controller.savedRevision,
+      workspace: controller.workspace, plan: live.planStyle, saveState: state }, draft, text);
+    if (!next) return false;
+    edit(next);
+    return true;
+  };
+
   async function reuseScript(preview: ScriptReusePreview, current: () => boolean): Promise<boolean> {
     const live = applyLive.current;
     if (!current() || live.working || preview.taskId !== live.taskId || preview.revision !== controller.savedRevision
@@ -340,7 +352,7 @@ export function TaskCanvas({ task, planStyle, busy, referenceImages, onSave, onC
       <span className="muted">{workspace.shots.length} 个镜头{reviewCount > 0 ? ` · ${reviewCount} 个待核对` : ""}</span>
     </div>
     <p className="helper">本地手动制作；真实生成尚未接入。虚线表示只读来源关系，实线资产引用可调整。</p>
-    {promptsOpen && <PromptPanel key={promptOpenRequest} taskId={task.id} savedRevision={controller.savedRevision} saveState={saveState} onApplyTemplate={applyTemplate} workspace={workspace} planStyle={planStyle} disabled={working} restoreDisabled={working || saveState.dirty || saveState.saving || saveState.conflict || !!saveState.error} onChange={edit} initialSelection={promptSelection} onClose={() => select(null)} />}
+    {promptsOpen && <PromptPanel key={promptOpenRequest} taskId={task.id} savedRevision={controller.savedRevision} saveState={saveState} onApplyTemplate={applyTemplate} onApplyVideoDraft={applyVideoDraft} workspace={workspace} planStyle={planStyle} disabled={working} restoreDisabled={working || saveState.dirty || saveState.saving || saveState.conflict || !!saveState.error} onChange={edit} initialSelection={promptSelection} onClose={() => select(null)} />}
     {closeNotice && <p role="status" className="review-notice">已阻止关闭以保护尚未保存的内容。等待显示“已保存”后可再次关闭；保存失败时请先重试。</p>}
     {framesOpen && <FramePanel workspace={workspace} planStyle={planStyle} taskId={task.id} images={images} busy={working || saveState.saving} dirty={dirty} saveState={saveState} savedRevision={controller.savedRevision}
       onChange={edit} onBusy={setReferenceBusy} onEditPrompt={kind => select(`prompt:${kind}`)} focusSlot={frameSlot} onClose={() => select(null)}

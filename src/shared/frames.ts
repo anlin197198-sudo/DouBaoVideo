@@ -1,5 +1,5 @@
 import type { PlanStyleContext } from "./prompts";
-import type { FrameSlot, FrameWorkspace, Plan, TaskWorkspace } from "./models";
+import type { FrameCandidate, FrameSlot, FrameWorkspace, Plan, TaskWorkspace } from "./models";
 import { findPrompt, promptInput } from "./prompts";
 
 export function frameState(workspace: TaskWorkspace): FrameWorkspace {
@@ -9,6 +9,12 @@ export function frameState(workspace: TaskWorkspace): FrameWorkspace {
 export function currentFrame(workspace: TaskWorkspace, slot: FrameSlot) {
   const frames = frameState(workspace);
   return frames.candidates.find(candidate => candidate.id === (slot === "first" ? frames.firstId : frames.lastId) && candidate.slot === slot);
+}
+/** Informational only: compare candidate provenance to current input for its own role. */
+export function frameCandidateHasOlderInput(workspace: TaskWorkspace, plan: PlanStyleContext, candidate: FrameCandidate): boolean {
+  const kind = candidate.slot === "first" ? "firstFrame" : "lastFrame";
+  return candidate.inputSnapshot !== promptInput(workspace, plan, kind, null)
+    || candidate.promptText !== (findPrompt(workspace, kind, null)?.text ?? "");
 }
 export function addFrameCandidate(workspace: TaskWorkspace, planStyle: PlanStyleContext, slot: FrameSlot, imageId: string, id: string, now: string, savedInputs = true): TaskWorkspace {
   const frames = frameState(workspace), kind = slot === "first" ? "firstFrame" : "lastFrame";

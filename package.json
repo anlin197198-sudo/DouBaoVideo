@@ -14,7 +14,9 @@
     "build": "npm run typecheck && electron-vite build",
     "test": "node --import tsx --test tests/*.test.ts",
     "package:win": "node packaging/build-windows.mjs",
-    "audit:win": "node packaging/audit-windows.mjs"
+    "audit:win": "node packaging/audit-windows.mjs",
+    "build:f17:native-smoke": "electron-vite build --config electron.probe-smoke.config.ts",
+    "smoke:f17:native": "node scripts/run-f17-native-probe.mjs"
   },
   "dependencies": {
     "@xyflow/react": "13.0.2",

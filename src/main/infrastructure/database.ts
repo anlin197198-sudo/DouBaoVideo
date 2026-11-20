@@ -128,6 +128,8 @@ const migrations = [
   ` },
 ];
 
+export const CURRENT_DATABASE_VERSION = 7 as const;
+
 const baselinePrompt = z.object({ kind: z.enum(["shot", "video", "firstFrame", "lastFrame"]), shotId: z.uuid().nullable(),
   text: z.string().max(100000), inputSnapshot: z.string().max(10000000), version: z.number().int().positive(), source: z.literal("manual") }).strict()
   .refine(value => value.kind === "shot" ? value.shotId !== null : value.shotId === null);
@@ -163,7 +165,7 @@ function seedScriptHistory(database: DatabaseSync): void {
 }
 
 /** Trusted version-specific DDL only; never executes schema supplied by a backup. */
-export function trustedDatabaseSchema(version: 3 | 4 | 5 | 6 | 7): string {
+export function trustedDatabaseSchema(version: 1 | 2 | 3 | 4 | 5 | 6 | 7): string {
   const database = new DatabaseSync(":memory:");
   try {
     for (const migration of migrations.filter(item => item.version <= version)) database.exec(migration.sql);
@@ -213,7 +215,7 @@ export class ApplicationDatabase {
   }
 
   private migrate(): void {
-    const latestVersion = migrations.at(-1)!.version;
+    const latestVersion = CURRENT_DATABASE_VERSION;
     if (this.version > latestVersion)
       throw new Error(
         "The workspace database requires a newer application version",

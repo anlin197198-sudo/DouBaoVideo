@@ -82,6 +82,10 @@ export function auditWindowsDirectory(directory, freshOut) {
       !files.some((name) => /^renderer\/assets\/.+\.js$/.test(name))) {
     throw new Error('Fresh build is missing a required main, preload, or renderer entry.');
   }
+  if (!files.includes('renderer/f17-video-probe.html') || !files.includes('renderer/f17-video-probe-assets.json') ||
+      !files.some((name) => /^renderer\/assets\/f17-video-probe-[a-z0-9_-]+\.js$/i.test(name))) {
+    throw new Error('Fresh build is missing the dedicated F17 video probe entry, manifest, or bundle.');
+  }
   checked('app.asar', () => {
     uncache(archive);
     const archived = listPackage(archive)

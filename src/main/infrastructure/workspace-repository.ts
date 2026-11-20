@@ -1,6 +1,6 @@
 import { localExecutionRecoveryState, localExecutionTimestamp } from "../../shared/execution-recovery";
 import { randomUUID, createHash } from "node:crypto";
-import { planChangePreview, removalProblem } from "../../shared/plan-changes";
+import { planChangePreview, removalProblem, weekDates } from "../../shared/plan-changes";
 import { inheritsStyleNotes } from "../../shared/prompts";
 import type {
   Account,
@@ -98,13 +98,20 @@ export class WorkspaceRepository {
           hasRecordedRemoteReference: row.has_reference === 1,
         })),
       films: db
-        .prepare("SELECT id, task_id, version, created_at FROM films ORDER BY created_at DESC, id")
+        .prepare(`SELECT f.id, f.task_id, f.version, f.created_at,
+          CASE WHEN t.id IS NOT NULL AND e.operation = 'local-import' AND e.status = 'recorded'
+            AND e.account_id IS NULL AND e.remote_reference IS NULL THEN 1 ELSE 0 END AS from_local_import
+          FROM films f
+          LEFT JOIN tasks t ON t.id = f.task_id
+          LEFT JOIN executions e ON e.id = f.execution_id AND e.task_id = f.task_id
+          ORDER BY f.created_at DESC, f.id`)
         .all()
         .map((row) => ({
           id: String(row.id),
           taskId: String(row.task_id),
           version: typeof row.version === "number" && Number.isSafeInteger(row.version) && row.version > 0 ? row.version : null,
           createdAt: localExecutionTimestamp(row.created_at),
+          provenance: row.from_local_import === 1 ? "local-import" : "unknown",
         })),
       referenceImages: db.prepare("SELECT * FROM reference_images ORDER BY created_at, id").all()
         .map(row => ({
@@ -135,10 +142,7 @@ export class WorkspaceRepository {
       "INSERT INTO tasks (id, plan_id, title, business_date, sequence, workspace_json, updated_at, execution_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     );
     const tasks: VideoTask[] = [];
-    for (let day = 0; day < 7; day++) {
-      const date = new Date(input.startDate + "T12:00:00.000Z");
-      date.setUTCDate(date.getUTCDate() + day);
-      const businessDate = date.toISOString().slice(0, 10);
+    for (const [day, businessDate] of weekDates(input.startDate).entries()) {
       for (let sequence = 1; sequence <= input.dailyCount; sequence++) {
         const workspace: TaskWorkspace = {
           script: "",

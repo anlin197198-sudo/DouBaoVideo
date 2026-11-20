@@ -10,7 +10,7 @@ import sharp from "sharp";
 import { ApplicationDatabase } from "../src/main/infrastructure/database";
 import { ReferenceImageStore } from "../src/main/infrastructure/reference-image-store";
 import { createApplicationServices } from "../src/main/application/services";
-import { addFrameCandidate, chooseFrame, confirmationBlocker, confirmationIssue, currentFrame, frameState, hasCurrentConfirmation } from "../src/shared/frames";
+import { addFrameCandidate, chooseFrame, confirmationBlocker, confirmationIssue, currentFrame, frameCandidateHasOlderInput, frameState, invalidateChangedConfirmation, hasCurrentConfirmation } from "../src/shared/frames";
 import { editPrompt, reviewPrompt, findPrompt } from "../src/shared/prompts";
 import type { TaskWorkspace } from "../src/shared/models";
 
@@ -370,4 +370,31 @@ test("candidate imported from dirty prompt keeps unsaved-version provenance acro
     assert.deepEqual(currentFrame(w, "first"), provenance); assert.equal(findPrompt(w, "firstFrame", null)!.version, 2);
     assert.equal(f.store.isAvailable(image.id), true); verifyClosedReopen(f, w);
   } finally { f.close(); }
+});
+
+test("frame origin advisory is role-specific and does not alter immutable provenance or confirmation", async () => {
+ const f=await fixture(), style="realistic" as const;
+ try {
+  let w=editPrompt(f.workspace,style,"firstFrame",null,"Original first");
+  w=editPrompt(w,style,"lastFrame",null,"Original last");
+  const firstId=randomUUID(),lastId=randomUUID(),at="2026-11-20T01:00:00Z";
+  w=chooseFrame(addFrameCandidate(w,style,"first",f.image.id,firstId,at),"first",firstId);
+  w=chooseFrame(addFrameCandidate(w,style,"last",f.image.id,lastId,at,false),"last",lastId);
+  assert.ok((await save(f,w)).ok);assert.ok((await confirm(f)).ok);
+  w=f.repository.getTask(f.tasks[0]!.id).workspace;
+  const first=currentFrame(w,"first")!, last=currentFrame(w,"last")!, original=structuredClone(w.frames?.candidates);
+  assert.equal(first.promptVersion,1);assert.equal(last.promptVersion,null);
+  assert.equal(frameCandidateHasOlderInput(w,style,first),false);
+  assert.equal(frameCandidateHasOlderInput(w,style,last),false);
+  let changed=invalidateChangedConfirmation(w,editPrompt(w,style,"firstFrame",null,"Updated first"),style);
+  changed=reviewPrompt(changed,style,"firstFrame",null);
+  assert.equal(frameCandidateHasOlderInput(changed,style,first),true);
+  assert.equal(frameCandidateHasOlderInput(changed,style,last),false);
+  assert.equal(confirmationIssue(changed,style),null);
+  const reverted=invalidateChangedConfirmation(changed,editPrompt(changed,style,"firstFrame",null,"Original first"),style);
+  assert.equal(frameCandidateHasOlderInput(reverted,style,first),false);
+  assert.equal(hasCurrentConfirmation(reverted,style),false);
+  assert.equal(reverted.frames?.confirmation?.invalidated,true);
+  assert.deepEqual(reverted.frames?.candidates,original);
+ } finally { f.close(); }
 });

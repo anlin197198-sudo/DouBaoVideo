@@ -1,3 +1,4 @@
+import type { ApplySavedShotVideoDraft } from "../../../shared/saved-shot-video-draft";
 import { ReferenceMappingPreview } from "./ReferenceMappingPreview";
 import { SavedShotSummary } from "./SavedShotSummary";
 import { captureTemporaryTemplateApply, type TemporaryTemplateApply } from "../../../shared/temporary-template-apply";
@@ -13,14 +14,14 @@ import { formatPromptTemplate } from "../../../shared/prompt-template";
 
 /** Preview/edit/reset/copy are isolated; only the explicit apply action reaches normal autosave. */
 type Props = {
-  taskId: string; savedRevision: number; saveState: InspectionSaveState; onApplyTemplate: TemporaryTemplateApply;
+  taskId: string; savedRevision: number; saveState: InspectionSaveState; onApplyTemplate: TemporaryTemplateApply; onApplyVideoDraft: ApplySavedShotVideoDraft;
   workspace: TaskWorkspace; planStyle: PlanStyleContext; kind: PromptKind; shotId: string | null; disabled: boolean;
 };
 export function PromptTemplatePreview(props: Props) {
   const endpoint = props.kind === "firstFrame" ? props.workspace.shots[0]?.id : props.kind === "lastFrame" ? props.workspace.shots.at(-1)?.id : props.shotId;
   return <ScopedTemplatePreview key={`${props.taskId}:${props.kind}:${endpoint ?? "none"}`} {...props} />;
 }
-function ScopedTemplatePreview({ workspace, planStyle, kind, shotId, disabled, taskId, savedRevision, saveState, onApplyTemplate }: Props) {
+function ScopedTemplatePreview({ workspace, planStyle, kind, shotId, disabled, taskId, savedRevision, saveState, onApplyTemplate, onApplyVideoDraft }: Props) {
   const [fields, setFields] = useState(emptyPreviewGlobalFields);
   const [fieldError, setFieldError] = useState("");
   const [slotFields, setSlotFields] = useState(() => kind !== "video" && workspace.shots.length ? emptyTemplateSlotFields(workspace, kind, shotId) : null);
@@ -127,6 +128,6 @@ function ScopedTemplatePreview({ workspace, planStyle, kind, shotId, disabled, t
     {editorMessage && <p role="status">{editorMessage}</p>}
     <label>格式预览文本<textarea readOnly rows={12} value={text} /></label>
     <ReferenceMappingPreview context={{ taskId, revision: savedRevision, workspace, plan: planStyle, kind, shotId, templateText: text }} disabled={disabled} />
-    {kind === "video" && <SavedShotSummary key={taskId} taskId={taskId} workspace={workspace} planStyle={planStyle} savedRevision={savedRevision} saveState={saveState} disabled={disabled} />}
+    {kind === "video" && <SavedShotSummary key={taskId} taskId={taskId} workspace={workspace} planStyle={planStyle} savedRevision={savedRevision} saveState={saveState} disabled={disabled} onApplyVideoDraft={onApplyVideoDraft} />}
   </details>;
 }

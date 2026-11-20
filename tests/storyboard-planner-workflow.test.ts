@@ -114,6 +114,62 @@ test("drops stale responses and redacts malformed replies and transport errors; 
   } finally { f.database.close(); }
 });
 
+for (const stage of ["consent", "provider"] as const) {
+  test(`rejects stale F07 candidates after saving only manual placement and asset links during ${stage}`, async () => {
+    const candidate = JSON.stringify({ formatVersion: 1, shots: [
+      { order: 1, title: "未命名镜头", visual: "", action: "", framing: "", motion: "", dialogue: "" },
+      { order: 2, title: "合成追加镜头", visual: "方块", action: "", framing: "近景", motion: "固定", dialogue: "" },
+    ] });
+    let begin!: () => void, release!: () => void, approvals = 0, sends = 0;
+    const started = new Promise<void>(resolve => { begin = resolve; });
+    const waitHere = () => new Promise<void>(resolve => { release = resolve; begin(); });
+    const f = fixture({ storyboardPlanner: port(async input => {
+      assert.equal(input.user, script);
+      if (++sends === 1 && stage === "provider") await waitHere();
+      return candidate;
+    }), confirmStoryboard: async () => {
+      if (++approvals === 1 && stage === "consent") await waitHere();
+      return true;
+    } });
+    try {
+      const pending = f.run();
+      assert.equal(await Promise.race([started.then(() => "waiting"), pending.then(() => "finished")]), "waiting");
+      const before = f.repository.getTask(f.saved.id);
+      const shot = { ...before.workspace.shots[0]!, position: { x: 30, y: 70 } };
+      const asset = { id: randomUUID(), type: "person" as const, name: "合成角色", description: "", referenceImageId: null,
+        version: 1, position: { x: 5, y: 0 }, needsReview: false };
+      const fresh = f.database.transaction(() => f.repository.saveWorkspace({ id: before.id, expectedRevision: before.revision,
+        workspace: { ...before.workspace, shots: [shot], assets: [asset], assetLinks: [{ shotId: shot.id, assetId: asset.id }] },
+      }));
+      assert.equal(fresh.workspace.script, before.workspace.script);
+      assert.equal(fresh.revision, before.revision + 1);
+      release();
+      const stale = await pending;
+      assert.equal(errorCode(stale), "CONFLICT");
+      assert.equal(Object.hasOwn(stale, "data"), false);
+      const staleSends = stage === "consent" ? 0 : 1;
+      assert.equal(sends, staleSends);
+      assert.deepEqual(f.repository.getTask(fresh.id), fresh);
+
+      const request = { taskId: fresh.id, expectedRevision: fresh.revision };
+      const retried = await f.run(request);
+      assert.ok(retried.ok && retried.data.status === "ready" && retried.data.adoptionToken);
+      assert.equal(approvals, 2);
+      assert.equal(sends, staleSends + 1);
+      const adopted = await f.adopt({ ...request, token: retried.data.adoptionToken });
+      assert.ok(adopted.ok);
+      const draft = appendStoryboardDraft({ taskId: fresh.id, revision: fresh.revision, workspace: fresh.workspace,
+        state: { dirty: false, saving: false, conflict: false, error: null, requestId: null } }, adopted.data);
+      assert.ok(draft);
+      assert.deepEqual(draft.shots[0], fresh.workspace.shots[0]);
+      assert.deepEqual(draft.assetLinks, fresh.workspace.assetLinks);
+      assert.deepEqual(draft.assets, fresh.workspace.assets);
+      assert.equal(draft.shots[1]?.title, "合成追加镜头");
+      assert.deepEqual(f.repository.getTask(fresh.id), fresh);
+    } finally { f.database.close(); }
+  });
+}
+
 test("first candidate adoption requires a matching one-use token and yields ordered editable shots without creating writes", async () => {
   const second = { order: 2, title: " 第二个 ", visual: "另一场景", action: "举手", framing: "远景", motion: "摇镜头", dialogue: "合成对白" };
   const content = JSON.parse(payload);
